@@ -1,0 +1,109 @@
+@import "tailwindcss";
+
+:root {
+  --paper: #EDE8DD;
+  --paper-raised: #F6F3EA;
+  --ink: #211D17;
+  --ink-soft: #5B5546;
+  --label: #8C8471;
+  --rule: #D9D1BE;
+  --accent: #B8720E;
+  --accent-ink: #FFFFFF;
+  --accent-tint: #F3E3C8;
+
+  --add: #2A5F8F;
+  --add-tint: #DCE8F2;
+  --update: #B8720E;
+  --update-tint: #F3E3C8;
+  --cancel: #B23A2E;
+  --cancel-tint: #F5DFDB;
+  --ignore: #7A7361;
+  --ignore-tint: #E7E2D3;
+
+  --shadow: 0 1px 2px rgba(33, 29, 23, 0.06);
+}
+
+:root[data-theme="dark"] {
+  --paper: #17150F;
+  --paper-raised: #1E1B14;
+  --ink: #EDE7D9;
+  --ink-soft: #B3AB97;
+  --label: #857D69;
+  --rule: #34301F;
+  --accent: #D9922E;
+  --accent-ink: #17150F;
+  --accent-tint: #2D2312;
+
+  --add: #6FA3D1;
+  --add-tint: #1B2733;
+  --update: #D9922E;
+  --update-tint: #2D2312;
+  --cancel: #E0685A;
+  --cancel-tint: #301E1B;
+  --ignore: #9A927C;
+  --ignore-tint: #24211A;
+
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #17150F;
+    --paper-raised: #1E1B14;
+    --ink: #EDE7D9;
+    --ink-soft: #B3AB97;
+    --label: #857D69;
+    --rule: #34301F;
+    --accent: #D9922E;
+    --accent-ink: #17150F;
+    --accent-tint: #2D2312;
+
+    --add: #6FA3D1;
+    --add-tint: #1B2733;
+    --update: #D9922E;
+    --update-tint: #2D2312;
+    --cancel: #E0685A;
+    --cancel-tint: #301E1B;
+    --ignore: #9A927C;
+    --ignore-tint: #24211A;
+
+    --shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  height: 100%;
+}
+
+body {
+  min-height: 100%;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: "Bahnschrift", "Segoe UI", -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.tabular {
+  font-family: "Consolas", "Cascadia Mono", ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+::selection {
+  background: var(--accent-tint);
+  color: var(--ink);
+}
+
+a {
+  color: inherit;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
