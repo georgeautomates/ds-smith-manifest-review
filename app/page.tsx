@@ -78,11 +78,8 @@ function OrderCheckRow({
     <div style={{ borderBottom: "1px solid var(--rule)" }}>
       <div className="flex items-start gap-2.5 px-3 py-2.5">
         <input type="checkbox" checked={checked} onChange={onToggle} className="mt-0.5 size-4 shrink-0 cursor-pointer" />
-        <button onClick={onToggleExpand} className="min-w-0 flex-1 text-left cursor-pointer">
-          <div className="flex items-center gap-1.5">
-            <span className="tabular text-sm font-semibold" style={{ color: "var(--ink)" }}>{job.job_number}</span>
-            <span className="tabular text-[10px]" style={{ color: "var(--label)" }}>{expanded ? "▾" : "▸"}</span>
-          </div>
+        <div className="min-w-0 flex-1">
+          <span className="tabular text-sm font-semibold" style={{ color: "var(--ink)" }}>{job.job_number}</span>
           <div className="text-[11px] truncate" style={{ color: "var(--label)" }}>
             {job.delivery_point || job.collection_point || "—"}
           </div>
@@ -96,6 +93,18 @@ function OrderCheckRow({
               Already {job.review_action}
             </div>
           )}
+        </div>
+        <button
+          onClick={onToggleExpand}
+          className="shrink-0 flex items-center gap-1 px-2 py-1 rounded-sm text-[10px] font-bold uppercase tracking-wide cursor-pointer transition-colors"
+          style={{
+            background: expanded ? "var(--accent-tint)" : "var(--paper)",
+            color: expanded ? "var(--accent)" : "var(--ink-soft)",
+            border: `1px solid ${expanded ? "var(--accent)" : "var(--rule)"}`,
+          }}
+        >
+          {expanded ? "Hide" : "Details"}
+          <span className="tabular">{expanded ? "▾" : "▸"}</span>
         </button>
       </div>
       {expanded && (
