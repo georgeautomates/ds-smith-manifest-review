@@ -83,11 +83,19 @@ function OrderCheckRow({
           <div className="text-[11px] truncate" style={{ color: "var(--label)" }}>
             {job.delivery_point || job.collection_point || "—"}
           </div>
-          {job.suggested_action && (
+          {job.suggested_action === "Review" ? (
+            <div
+              className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide mt-0.5 px-1.5 py-0.5 rounded-sm"
+              style={{ background: "var(--cancel-tint)", color: "var(--cancel)" }}
+              title="Reply on an existing thread — not a confident new order or amendment, check manually"
+            >
+              Needs review
+            </div>
+          ) : job.suggested_action ? (
             <div className="text-[10px] font-bold uppercase tracking-wide mt-0.5" style={{ color: "var(--label)" }}>
               Suggested: {job.suggested_action}
             </div>
-          )}
+          ) : null}
           {job.review_action && (
             <div className="text-[10px] font-bold uppercase tracking-wide mt-0.5" style={{ color: "var(--ignore)" }}>
               Already {job.review_action}
@@ -137,7 +145,12 @@ function ManifestDetail({
   onProcessed: (messageId: string, jobNumbers: string[]) => void;
 }) {
   const pendingJobs = useMemo(() => manifest.jobs.filter((j) => !j.review_action), [manifest]);
-  const [checkedJobs, setCheckedJobs] = useState<Set<string>>(() => new Set(pendingJobs.map((j) => j.job_number)));
+  // "Review" jobs (chain-reply emails, no confident suggestion) never
+  // default-checked — there's no safe action to auto-accept, so they start
+  // as Ignore (unchecked) until a reviewer looks closer and decides.
+  const [checkedJobs, setCheckedJobs] = useState<Set<string>>(
+    () => new Set(pendingJobs.filter((j) => j.suggested_action && j.suggested_action !== "Review").map((j) => j.job_number))
+  );
   const [expandedJob, setExpandedJob] = useState<string | null>(null);
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState("");
@@ -179,7 +192,11 @@ function ManifestDetail({
     try {
       for (const job of pendingJobs) {
         const isChecked = checkedJobs.has(job.job_number);
-        const action: ManifestAction = isChecked ? job.suggested_action || "Add" : "Ignore";
+        // "Review" is never a valid action to save — if a Review job somehow
+        // ends up checked, still fall back to Add rather than send an invalid
+        // action to the API.
+        const suggestion: ManifestAction = job.suggested_action && job.suggested_action !== "Review" ? job.suggested_action : "Add";
+        const action: ManifestAction = isChecked ? suggestion : "Ignore";
         const source: "suggested" | "override" = isChecked && job.suggested_action === action ? "suggested" : "override";
         const res = await fetch("/api/manifests/action", {
           method: "POST",

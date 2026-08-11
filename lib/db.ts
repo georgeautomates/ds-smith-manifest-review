@@ -14,6 +14,11 @@ function getPool(): Pool {
 // ── Types ────────────────────────────────────────────────────────────────────
 
 export type ManifestAction = "Add" | "Update" | "Cancel" | "Ignore";
+// What the classifier proposes — a superset of ManifestAction. "Review" means
+// the classifier isn't confident enough to suggest a real action (e.g. a
+// reply-chain email, not a clean new order/amendment) — the reviewer must
+// still pick one of the four real ManifestAction values themselves.
+export type SuggestedAction = ManifestAction | "Review";
 
 export type ManifestJob = {
   job_number: string;
@@ -39,7 +44,7 @@ export type ManifestJob = {
   email_subject: string;
   email_received_at: string;
   email_body: string;
-  suggested_action: ManifestAction | "";
+  suggested_action: SuggestedAction | "";
   suggested_reason: string;
   review_action: ManifestAction | "";
   review_action_source: "suggested" | "override" | "";
@@ -83,7 +88,7 @@ function rowToJob(r: Record<string, any>): ManifestJob {
     email_subject: String(r.email_subject ?? ""),
     email_received_at: String(r.email_received_at ?? ""),
     email_body: String(r.email_body ?? ""),
-    suggested_action: (r.suggested_action as ManifestAction) || "",
+    suggested_action: (r.suggested_action as SuggestedAction) || "",
     suggested_reason: String(r.suggested_reason ?? ""),
     review_action: (r.review_action as ManifestAction) || "",
     review_action_source: (r.review_action_source as "suggested" | "override") || "",
