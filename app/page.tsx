@@ -49,38 +49,74 @@ function ManifestRow({ manifest, active, onClick }: { manifest: Manifest; active
   );
 }
 
+function ExtractionField({ label, value, sub }: { label: string; value: string; sub?: string }) {
+  return (
+    <div>
+      <div className="text-[9px] font-bold uppercase tracking-widest" style={{ color: "var(--label)" }}>{label}</div>
+      <div className="tabular text-xs font-semibold" style={{ color: "var(--ink)" }}>
+        {value || <span style={{ color: "var(--label)" }}>—</span>}
+      </div>
+      {sub && <div className="tabular text-[10px]" style={{ color: "var(--label)" }}>{sub}</div>}
+    </div>
+  );
+}
+
 function OrderCheckRow({
   job,
   checked,
+  expanded,
   onToggle,
+  onToggleExpand,
 }: {
   job: ManifestJob;
   checked: boolean;
+  expanded: boolean;
   onToggle: () => void;
+  onToggleExpand: () => void;
 }) {
   return (
-    <label
-      className="flex items-start gap-2.5 px-3 py-2.5 cursor-pointer"
-      style={{ borderBottom: "1px solid var(--rule)" }}
-    >
-      <input type="checkbox" checked={checked} onChange={onToggle} className="mt-0.5 size-4 shrink-0" />
-      <div className="min-w-0">
-        <div className="tabular text-sm font-semibold" style={{ color: "var(--ink)" }}>{job.job_number}</div>
-        <div className="text-[11px] truncate" style={{ color: "var(--label)" }}>
-          {job.delivery_point || job.collection_point || "—"}
-        </div>
-        {job.suggested_action && (
-          <div className="text-[10px] font-bold uppercase tracking-wide mt-0.5" style={{ color: "var(--label)" }}>
-            Suggested: {job.suggested_action}
+    <div style={{ borderBottom: "1px solid var(--rule)" }}>
+      <div className="flex items-start gap-2.5 px-3 py-2.5">
+        <input type="checkbox" checked={checked} onChange={onToggle} className="mt-0.5 size-4 shrink-0 cursor-pointer" />
+        <button onClick={onToggleExpand} className="min-w-0 flex-1 text-left cursor-pointer">
+          <div className="flex items-center gap-1.5">
+            <span className="tabular text-sm font-semibold" style={{ color: "var(--ink)" }}>{job.job_number}</span>
+            <span className="tabular text-[10px]" style={{ color: "var(--label)" }}>{expanded ? "▾" : "▸"}</span>
           </div>
-        )}
-        {job.review_action && (
-          <div className="text-[10px] font-bold uppercase tracking-wide mt-0.5" style={{ color: "var(--ignore)" }}>
-            Already {job.review_action}
+          <div className="text-[11px] truncate" style={{ color: "var(--label)" }}>
+            {job.delivery_point || job.collection_point || "—"}
           </div>
-        )}
+          {job.suggested_action && (
+            <div className="text-[10px] font-bold uppercase tracking-wide mt-0.5" style={{ color: "var(--label)" }}>
+              Suggested: {job.suggested_action}
+            </div>
+          )}
+          {job.review_action && (
+            <div className="text-[10px] font-bold uppercase tracking-wide mt-0.5" style={{ color: "var(--ignore)" }}>
+              Already {job.review_action}
+            </div>
+          )}
+        </button>
       </div>
-    </label>
+      {expanded && (
+        <div className="px-3 pb-3 grid grid-cols-2 gap-2" style={{ background: "var(--paper-raised)" }}>
+          <ExtractionField label="Collection" value={job.collection_point} sub={job.collection_postcode} />
+          <ExtractionField label="Delivery" value={job.delivery_point} sub={job.delivery_postcode} />
+          <ExtractionField label="Collection date/time" value={`${job.collection_date} ${job.collection_time}`.trim()} />
+          <ExtractionField label="Delivery date/time" value={`${job.delivery_date} ${job.delivery_time}`.trim()} />
+          <ExtractionField label="Price" value={job.price} />
+          <ExtractionField label="Order number" value={job.order_number} />
+          <ExtractionField label="Work type" value={job.work_type} />
+          <ExtractionField label="Booking window" value={job.booking_window} />
+          {job.traffic_note && (
+            <div className="col-span-2 rounded-sm px-2 py-1.5" style={{ background: "var(--accent-tint)", border: "1px solid var(--accent)" }}>
+              <div className="text-[9px] font-bold uppercase tracking-widest" style={{ color: "var(--accent)" }}>Traffic note</div>
+              <div className="text-xs font-semibold" style={{ color: "var(--ink)" }}>{job.traffic_note}</div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -93,6 +129,7 @@ function ManifestDetail({
 }) {
   const pendingJobs = useMemo(() => manifest.jobs.filter((j) => !j.review_action), [manifest]);
   const [checkedJobs, setCheckedJobs] = useState<Set<string>>(() => new Set(pendingJobs.map((j) => j.job_number)));
+  const [expandedJob, setExpandedJob] = useState<string | null>(null);
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState("");
   const [pdfHeight, setPdfHeight] = useState(DEFAULT_PDF_HEIGHT);
@@ -206,7 +243,9 @@ function ManifestDetail({
                 key={job.job_number}
                 job={job}
                 checked={checkedJobs.has(job.job_number)}
+                expanded={expandedJob === job.job_number}
                 onToggle={() => toggle(job.job_number)}
+                onToggleExpand={() => setExpandedJob((prev) => (prev === job.job_number ? null : job.job_number))}
               />
             ))}
           </div>
