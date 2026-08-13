@@ -323,6 +323,36 @@ export default function Page() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible]);
 
+  // Open straight onto one manifest from ?m=<message_id> — the link the
+  // notification email sends the Firmin team. Declared AFTER the auto-select
+  // effect above on purpose: both run in the same flush once manifests land,
+  // and the later setSelectedId wins, otherwise auto-select would immediately
+  // bounce us to visible[0].
+  const deepLinkApplied = useRef(false);
+  useEffect(() => {
+    if (deepLinkApplied.current || manifests.length === 0) return;
+    deepLinkApplied.current = true;
+    const wanted = new URLSearchParams(window.location.search).get("m");
+    if (!wanted) return;
+    const target = manifests.find((m) => m.message_id === wanted);
+    if (!target) return;  // stale or wrong-client link — leave the default view alone
+    // A linked manifest is often already processed by the time someone clicks
+    // through from their inbox, so land on whichever tab actually holds it.
+    setFilter(isPending(target) ? "new" : "processed");
+    setSelectedId(wanted);
+  }, [manifests]);
+
+  // Keep the address bar in step with the selection so the URL is always
+  // shareable/copyable. replaceState, not pushState — clicking through a list
+  // shouldn't stack up dozens of back-button entries.
+  useEffect(() => {
+    if (!selectedId) return;
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("m") === selectedId) return;
+    url.searchParams.set("m", selectedId);
+    window.history.replaceState(null, "", url);
+  }, [selectedId]);
+
   const selected = visible.find((m) => m.message_id === selectedId) ?? null;
 
   function handleProcessed(messageId: string) {
