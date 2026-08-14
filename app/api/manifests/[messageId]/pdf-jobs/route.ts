@@ -1,18 +1,26 @@
 import { NextRequest, NextResponse } from "next/server";
 import { PDFParse } from "pdf-parse";
-// @ts-expect-error -- no types for this internal worker entry; see comment below
-import * as pdfWorkerModule from "../../../../../node_modules/pdf-parse/dist/pdf-parse/esm/pdf.worker.mjs";
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+import * as pdfWorkerModule from "@/lib/pdf-worker/pdf.worker.mjs";
 import { getManifestByMessageId, getKnownJobs } from "@/lib/db";
 
 // pdfjs-dist (via pdf-parse) normally loads its worker with a *dynamic*
-// import(runtimeStringPath) — Turbopack can't trace a string built at
+// import(runtimeStringPath) — bundlers can't trace a string built at
 // runtime, so that resolves to a broken path and every parse fails ("Setting
-// up fake worker failed"). A *static* import of the same file (by relative
-// filesystem path, since pdf-parse's package.json "exports" map blocks a
-// package-specifier import into dist/) is statically analyzable by
-// Turbopack and works — stash it on globalThis under the name pdfjs-dist
+// up fake worker failed"). A *static* import of the same file is statically
+// analyzable and works — stash it on globalThis under the name pdfjs-dist
 // checks first (PDFWorker.#mainThreadWorkerMessageHandler) so it
 // short-circuits before ever attempting the dynamic import.
+//
+// The worker file is vendored into lib/pdf-worker/ (copied verbatim from
+// pdf-parse/dist/pdf-parse/esm/pdf.worker.mjs) rather than imported straight
+// from node_modules for two reasons: (1) pdf-parse's package.json "exports"
+// map blocks resolving a package-specifier import into its dist/ folder, and
+// (2) a relative "../../../node_modules/..." import worked in local dev and
+// local `next build` but Next's serverless file-tracing silently dropped it
+// from the deployed function bundle — outputFileTracingIncludes didn't fix
+// this either under Turbopack. A same-package import Next always traces
+// correctly is the reliable fix. Re-copy this file if pdf-parse is upgraded.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).pdfjsWorker = { WorkerMessageHandler: (pdfWorkerModule as any).WorkerMessageHandler };
 
