@@ -485,6 +485,14 @@ export default function Page() {
   const [filter, setFilter] = useState<"new" | "processed">("new");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showRecipients, setShowRecipients] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function showToast(message: string) {
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    setToast(message);
+    toastTimer.current = setTimeout(() => setToast(null), 3500);
+  }
 
   const load = useCallback(() => {
     setLoading(true);
@@ -542,7 +550,7 @@ export default function Page() {
 
   const selected = visible.find((m) => m.message_id === selectedId) ?? null;
 
-  function handleProcessed(messageId: string) {
+  function handleProcessed(messageId: string, jobNumbers: string[]) {
     setManifests((prev) => prev.map((m) => {
       if (m.message_id !== messageId) return m;
       return {
@@ -553,6 +561,7 @@ export default function Page() {
     // Re-fetch to pick up the real actions/timestamps written server-side.
     load();
     setFilter("new");
+    showToast(`${jobNumbers.length} order${jobNumbers.length === 1 ? "" : "s"} processed`);
   }
 
   return (
@@ -629,6 +638,24 @@ export default function Page() {
               {filter === "new" ? "No orders need to process." : "Select a manifest to view it."}
             </div>
           )}
+        </div>
+      )}
+
+      {toast && (
+        <div
+          role="status"
+          className="fixed bottom-6 right-6 z-50 flex items-center gap-2.5 rounded-sm px-4 py-3 text-sm font-semibold shadow-lg"
+          style={{
+            background: "var(--add-tint)",
+            color: "var(--add)",
+            border: "1px solid var(--add)",
+            animation: "toast-in 0.2s ease-out",
+          }}
+        >
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M13.5 4.5L6 12L2.5 8.5" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          {toast}
         </div>
       )}
     </div>
