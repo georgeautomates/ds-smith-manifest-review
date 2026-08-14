@@ -190,7 +190,10 @@ function ManifestDetail({
   const [expandedJob, setExpandedJob] = useState<string | null>(null);
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState("");
-  const [pdfHeight, setPdfHeight] = useState(DEFAULT_PDF_HEIGHT);
+  // null = fill available height (the default — no fixed height means no dead
+  // space below the PDF on a tall window). Only becomes a concrete pixel value
+  // once the reviewer actually drags the resize handle.
+  const [pdfHeight, setPdfHeight] = useState<number | null>(null);
   const dragState = useRef<{ startY: number; startHeight: number } | null>(null);
   const [otherJobs, setOtherJobs] = useState<OtherPdfJob[]>([]);
 
@@ -220,7 +223,10 @@ function ManifestDetail({
   }
 
   function onDragStart(e: React.PointerEvent) {
-    dragState.current = { startY: e.clientY, startHeight: pdfHeight };
+    // pdfHeight is null until the reviewer's first drag — seed the drag from
+    // the panel's actual current (auto-filled) height so the PDF doesn't jump.
+    const currentHeight = pdfHeight ?? e.currentTarget.previousElementSibling?.getBoundingClientRect().height ?? DEFAULT_PDF_HEIGHT;
+    dragState.current = { startY: e.clientY, startHeight: currentHeight };
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
   }
   function onDragMove(e: React.PointerEvent) {
@@ -272,7 +278,10 @@ function ManifestDetail({
       <div className="flex-1 flex min-w-0 min-h-0 overflow-hidden">
         {/* Booking form, resizable */}
         <div className="flex-1 flex flex-col min-w-0" style={{ borderRight: "1px solid var(--rule)" }}>
-          <div style={{ height: pdfHeight }} className="shrink-0 flex flex-col min-h-0" >
+          <div
+            style={pdfHeight != null ? { height: pdfHeight } : undefined}
+            className={pdfHeight != null ? "shrink-0 flex flex-col min-h-0" : "flex-1 flex flex-col min-h-0"}
+          >
             {pdfUrl ? (
               <iframe
                 src={pdfUrl.replace("/view", "/preview")}
@@ -297,7 +306,7 @@ function ManifestDetail({
             <span className="w-8 h-0.5 rounded-full" style={{ background: "var(--rule)" }} />
           </div>
           {pdfUrl && (
-            <div className="flex-1 min-h-0 overflow-y-auto px-6 py-3">
+            <div className="shrink-0 max-h-32 overflow-y-auto px-6 py-3">
               <a href={pdfUrl} target="_blank" rel="noreferrer" className="text-[11px] font-bold uppercase tracking-wide" style={{ color: "var(--accent)" }}>
                 Open booking form in new tab ↗
               </a>
