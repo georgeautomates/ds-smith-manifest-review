@@ -567,6 +567,10 @@ export default function Page() {
   return (
     <div className="flex-1 flex flex-col min-h-0" style={{ background: "var(--paper)" }}>
       <header className="shrink-0 px-6 py-3 flex items-center gap-4" style={{ borderBottom: "1px solid var(--rule)", background: "var(--paper-raised)" }}>
+        <div className="shrink-0 rounded-sm px-2 py-1" style={{ background: "#FFFFFF" }}>
+          <img src="/firmin-logo.png" alt="Alan Firmin" className="h-5 w-auto block" />
+        </div>
+        <span style={{ color: "var(--rule)" }}>|</span>
         <div className="flex items-baseline gap-2">
           <span className="text-xs font-bold uppercase tracking-widest" style={{ color: "var(--accent)" }}>DS Smith</span>
           <span style={{ color: "var(--rule)" }}>/</span>

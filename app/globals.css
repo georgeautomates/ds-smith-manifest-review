@@ -1,71 +1,74 @@
 @import "tailwindcss";
 
+/* Alan Firmin brand — navy wordmark #03133C + a blue-gray "fan" mark
+   (extracted from the real logo). Was a warm amber/cream theme unrelated
+   to the actual brand; re-themed cool/navy to match. */
 :root {
-  --paper: #EDE8DD;
-  --paper-raised: #F6F3EA;
-  --ink: #211D17;
-  --ink-soft: #5B5546;
-  --label: #8C8471;
-  --rule: #D9D1BE;
-  --accent: #B8720E;
+  --paper: #EAECF2;
+  --paper-raised: #F5F6FA;
+  --ink: #0B1A38;
+  --ink-soft: #4A5875;
+  --label: #7E88A3;
+  --rule: #D3D8E4;
+  --accent: #1C345D;
   --accent-ink: #FFFFFF;
-  --accent-tint: #F3E3C8;
+  --accent-tint: #DCE3EF;
 
   --add: #2A5F8F;
   --add-tint: #DCE8F2;
-  --update: #B8720E;
-  --update-tint: #F3E3C8;
+  --update: #1C345D;
+  --update-tint: #DCE3EF;
   --cancel: #B23A2E;
   --cancel-tint: #F5DFDB;
-  --ignore: #7A7361;
-  --ignore-tint: #E7E2D3;
+  --ignore: #6E7893;
+  --ignore-tint: #E4E7EE;
 
-  --shadow: 0 1px 2px rgba(33, 29, 23, 0.06);
+  --shadow: 0 1px 2px rgba(11, 26, 56, 0.08);
 }
 
 :root[data-theme="dark"] {
-  --paper: #17150F;
-  --paper-raised: #1E1B14;
-  --ink: #EDE7D9;
-  --ink-soft: #B3AB97;
-  --label: #857D69;
-  --rule: #34301F;
-  --accent: #D9922E;
-  --accent-ink: #17150F;
-  --accent-tint: #2D2312;
+  --paper: #0B1220;
+  --paper-raised: #121B2E;
+  --ink: #E8ECF5;
+  --ink-soft: #A9B4CC;
+  --label: #7A85A0;
+  --rule: #263553;
+  --accent: #7891B1;
+  --accent-ink: #0B1220;
+  --accent-tint: #1B2A47;
 
   --add: #6FA3D1;
-  --add-tint: #1B2733;
-  --update: #D9922E;
-  --update-tint: #2D2312;
+  --add-tint: #16283D;
+  --update: #7891B1;
+  --update-tint: #1B2A47;
   --cancel: #E0685A;
   --cancel-tint: #301E1B;
-  --ignore: #9A927C;
-  --ignore-tint: #24211A;
+  --ignore: #8B94AC;
+  --ignore-tint: #1A2438;
 
   --shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --paper: #17150F;
-    --paper-raised: #1E1B14;
-    --ink: #EDE7D9;
-    --ink-soft: #B3AB97;
-    --label: #857D69;
-    --rule: #34301F;
-    --accent: #D9922E;
-    --accent-ink: #17150F;
-    --accent-tint: #2D2312;
+    --paper: #0B1220;
+    --paper-raised: #121B2E;
+    --ink: #E8ECF5;
+    --ink-soft: #A9B4CC;
+    --label: #7A85A0;
+    --rule: #263553;
+    --accent: #7891B1;
+    --accent-ink: #0B1220;
+    --accent-tint: #1B2A47;
 
     --add: #6FA3D1;
-    --add-tint: #1B2733;
-    --update: #D9922E;
-    --update-tint: #2D2312;
+    --add-tint: #16283D;
+    --update: #7891B1;
+    --update-tint: #1B2A47;
     --cancel: #E0685A;
     --cancel-tint: #301E1B;
-    --ignore: #9A927C;
-    --ignore-tint: #24211A;
+    --ignore: #8B94AC;
+    --ignore-tint: #1A2438;
 
     --shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
   }
