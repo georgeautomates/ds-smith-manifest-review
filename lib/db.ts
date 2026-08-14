@@ -206,6 +206,34 @@ export async function getManifestByMessageId(messageId: string): Promise<Manifes
   return buildManifest(messageId, rows.map(rowToJob));
 }
 
+export type OtherJob = {
+  job_number: string;
+  message_id: string;
+  review_action: ManifestAction | "";
+};
+
+/**
+ * Job numbers found in a PDF but not part of the given manifest's own job
+ * list — i.e. jobs DS Smith included on the same booking-form attachment
+ * that were already ingested from an earlier email and so were dropped by
+ * dedup before reaching this manifest. Looked up by job number across the
+ * whole table (not scoped to message_id) since that's exactly where an
+ * already-seen job would have been written.
+ */
+export async function getKnownJobs(jobNumbers: string[]): Promise<OtherJob[]> {
+  if (jobNumbers.length === 0) return [];
+  const pool = getPool();
+  const { rows } = await pool.query(
+    `SELECT job_number, message_id, review_action FROM st_regis_orders WHERE job_number = ANY($1)`,
+    [jobNumbers]
+  );
+  return rows.map((r) => ({
+    job_number: String(r.job_number ?? ""),
+    message_id: String(r.message_id ?? ""),
+    review_action: (r.review_action as ManifestAction) || "",
+  }));
+}
+
 export type ManifestActionDecision = {
   job_number: string;
   action: ManifestAction;

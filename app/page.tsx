@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import type { Manifest, ManifestJob, ManifestAction } from "@/lib/db";
 
+type OtherPdfJob = { job_number: string; message_id: string; review_action: ManifestAction | ""; found: boolean };
+
 const DEFAULT_PDF_HEIGHT = 520;
 const MIN_PDF_HEIGHT = 240;
 const MAX_PDF_HEIGHT = 1000;
@@ -137,6 +139,40 @@ function OrderCheckRow({
   );
 }
 
+function otherJobStatus(job: OtherPdfJob): string {
+  if (!job.found) return "not on file";
+  if (job.review_action) return `${job.review_action.toLowerCase()}, on another email`;
+  return "pending review on another email";
+}
+
+function OtherJobsHint({ jobs }: { jobs: OtherPdfJob[] }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <div
+      className="shrink-0 px-3 py-2 text-[11px] leading-snug"
+      style={{ background: "var(--accent-tint)", borderBottom: "1px solid var(--rule)", color: "var(--ink-soft)" }}
+    >
+      <button
+        onClick={() => setExpanded((v) => !v)}
+        className="w-full text-left cursor-pointer"
+      >
+        This PDF also lists {jobs.length} other job{jobs.length === 1 ? "" : "s"} not shown below{" "}
+        <span className="tabular">{expanded ? "▾" : "▸"}</span>
+      </button>
+      {expanded && (
+        <div className="mt-1.5 space-y-0.5">
+          {jobs.map((j) => (
+            <div key={j.job_number} className="flex items-center justify-between gap-2">
+              <span className="tabular font-semibold">{j.job_number}</span>
+              <span>{otherJobStatus(j)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ManifestDetail({
   manifest,
   onProcessed,
@@ -156,10 +192,21 @@ function ManifestDetail({
   const [error, setError] = useState("");
   const [pdfHeight, setPdfHeight] = useState(DEFAULT_PDF_HEIGHT);
   const dragState = useRef<{ startY: number; startHeight: number } | null>(null);
+  const [otherJobs, setOtherJobs] = useState<OtherPdfJob[]>([]);
 
   useEffect(() => {
     setCheckedJobs(new Set(pendingJobs.map((j) => j.job_number)));
   }, [manifest.message_id, pendingJobs]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setOtherJobs([]);
+    fetch(`/api/manifests/${encodeURIComponent(manifest.message_id)}/pdf-jobs`)
+      .then((r) => r.json())
+      .then((d) => { if (!cancelled) setOtherJobs(d.otherJobs ?? []); })
+      .catch(() => { if (!cancelled) setOtherJobs([]); });
+    return () => { cancelled = true; };
+  }, [manifest.message_id]);
 
   const pdfUrl = manifest.jobs.find((j) => j.pdf_url)?.pdf_url ?? "";
 
@@ -263,6 +310,9 @@ function ManifestDetail({
           <div className="shrink-0 px-3 py-2.5" style={{ borderBottom: "1px solid var(--rule)", background: "var(--paper-raised)" }}>
             <span className="text-[11px] font-bold uppercase tracking-widest" style={{ color: "var(--label)" }}>Order numbers</span>
           </div>
+          {otherJobs.length > 0 && (
+            <OtherJobsHint jobs={otherJobs} />
+          )}
           <div className="flex-1 overflow-y-auto">
             {manifest.jobs.map((job) => (
               <OrderCheckRow
