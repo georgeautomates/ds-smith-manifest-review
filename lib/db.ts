@@ -259,3 +259,43 @@ export async function saveManifestAction(decision: ManifestActionDecision): Prom
     [decision.action, decision.source, decision.reviewed_by, decision.job_number]
   );
 }
+
+// ── Notification recipients ──────────────────────────────────────────────────
+//
+// Who gets the "new manifest waiting for review" email. Deliberately a table
+// rather than an env var: the Firmin team need to add and remove people
+// themselves, and an env var would mean a redeploy every time someone joins or
+// leaves. Read by the Python agent at send time too, so this table is the one
+// shared source of truth for the recipient list.
+
+export type Recipient = {
+  id: number;
+  email: string;
+  added_at: string;
+};
+
+export async function getRecipients(): Promise<Recipient[]> {
+  const pool = getPool();
+  const { rows } = await pool.query(
+    `SELECT id, email, added_at FROM manifest_review_recipients ORDER BY email`
+  );
+  return rows.map((r) => ({
+    id: Number(r.id),
+    email: String(r.email),
+    added_at: r.added_at ? String(r.added_at) : "",
+  }));
+}
+
+/** Idempotent — re-adding an existing address is a no-op, not an error. */
+export async function addRecipient(email: string): Promise<void> {
+  const pool = getPool();
+  await pool.query(
+    `INSERT INTO manifest_review_recipients (email) VALUES ($1) ON CONFLICT (email) DO NOTHING`,
+    [email]
+  );
+}
+
+export async function removeRecipient(id: number): Promise<void> {
+  const pool = getPool();
+  await pool.query(`DELETE FROM manifest_review_recipients WHERE id = $1`, [id]);
+}

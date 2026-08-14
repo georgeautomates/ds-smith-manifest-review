@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
-import type { Manifest, ManifestJob, ManifestAction } from "@/lib/db";
+import type { Manifest, ManifestJob, ManifestAction, Recipient } from "@/lib/db";
 
 type OtherPdfJob = { job_number: string; message_id: string; review_action: ManifestAction | ""; found: boolean };
 
@@ -342,12 +342,140 @@ function ManifestDetail({
   );
 }
 
+/**
+ * Who gets notified when a manifest is waiting for review. The Firmin team
+ * maintain this themselves — the sending agent reads the same table at send
+ * time, so changes take effect on the next email with no redeploy.
+ */
+function RecipientsPanel() {
+  const [recipients, setRecipients] = useState<Recipient[]>([]);
+  const [email, setEmail] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState("");
+
+  const refresh = useCallback(async () => {
+    try {
+      const d = await (await fetch("/api/recipients")).json();
+      if (!d.ok) { setError(d.error ?? "Could not load recipients"); return; }
+      setRecipients(d.recipients ?? []);
+      setError("");
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setLoaded(true);
+    }
+  }, []);
+
+  useEffect(() => { refresh(); }, [refresh]);
+
+  // Both add and remove return the refreshed list, so the panel never has to
+  // guess at the new state or fire a second round-trip to find out.
+  async function send(method: "POST" | "DELETE", body: object, failMsg: string) {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const d = await (await fetch("/api/recipients", {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      })).json();
+      if (!d.ok) { setError(d.error ?? failMsg); return; }
+      setRecipients(d.recipients ?? []);
+      setError("");
+      return true;
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function add(e: React.FormEvent) {
+    e.preventDefault();
+    const value = email.trim();
+    if (!value) return;
+    if (await send("POST", { email: value }, "Could not add that address")) setEmail("");
+  }
+
+  return (
+    <div
+      className="absolute right-0 top-full mt-1 w-80 z-20 rounded-sm shadow-lg"
+      style={{ background: "var(--paper-raised)", border: "1px solid var(--rule)" }}
+    >
+      <div className="px-3 py-2" style={{ borderBottom: "1px solid var(--rule)" }}>
+        <div className="text-[10px] font-bold uppercase tracking-wide" style={{ color: "var(--label)" }}>
+          Review notifications
+        </div>
+        <div className="text-[11px] mt-0.5" style={{ color: "var(--ink-soft)" }}>
+          Everyone here is emailed when a manifest needs review.
+        </div>
+      </div>
+
+      {error && (
+        <div className="px-3 py-2 text-[11px]" style={{ background: "var(--cancel-tint)", color: "var(--cancel)" }}>
+          {error}
+        </div>
+      )}
+
+      <div className="max-h-56 overflow-y-auto">
+        {!loaded ? (
+          <div className="px-3 py-3 text-[11px]" style={{ color: "var(--label)" }}>Loading…</div>
+        ) : recipients.length === 0 ? (
+          <div className="px-3 py-3 text-[11px]" style={{ color: "var(--label)" }}>
+            Nobody is being notified yet. Add an address below.
+          </div>
+        ) : (
+          recipients.map((r) => (
+            <div
+              key={r.id}
+              className="px-3 py-2 flex items-center gap-2"
+              style={{ borderBottom: "1px solid var(--rule)" }}
+            >
+              <span className="text-[12px] truncate flex-1" style={{ color: "var(--ink)" }}>{r.email}</span>
+              <button
+                onClick={() => send("DELETE", { id: r.id }, "Could not remove that address")}
+                disabled={busy}
+                title={`Stop notifying ${r.email}`}
+                className="text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-sm shrink-0"
+                style={{ color: "var(--cancel)", border: "1px solid var(--rule)" }}
+              >
+                Remove
+              </button>
+            </div>
+          ))
+        )}
+      </div>
+
+      <form onSubmit={add} className="p-2 flex gap-1.5" style={{ borderTop: "1px solid var(--rule)" }}>
+        <input
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="name@company.com"
+          className="flex-1 min-w-0 px-2 py-1 text-[12px] rounded-sm"
+          style={{ border: "1px solid var(--rule)", background: "var(--paper)", color: "var(--ink)" }}
+        />
+        <button
+          type="submit"
+          disabled={busy || !email.trim()}
+          className="text-[10px] font-bold uppercase tracking-wide px-2.5 rounded-sm shrink-0"
+          style={{ background: "var(--accent)", color: "var(--paper-raised)", opacity: busy || !email.trim() ? 0.5 : 1 }}
+        >
+          Add
+        </button>
+      </form>
+    </div>
+  );
+}
+
 export default function Page() {
   const [manifests, setManifests] = useState<Manifest[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [filter, setFilter] = useState<"new" | "processed">("new");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [showRecipients, setShowRecipients] = useState(false);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -373,6 +501,36 @@ export default function Page() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible]);
 
+  // Open straight onto one manifest from ?m=<message_id> — the link the
+  // notification email sends the Firmin team. Declared AFTER the auto-select
+  // effect above on purpose: both run in the same flush once manifests land,
+  // and the later setSelectedId wins, otherwise auto-select would immediately
+  // bounce us to visible[0].
+  const deepLinkApplied = useRef(false);
+  useEffect(() => {
+    if (deepLinkApplied.current || manifests.length === 0) return;
+    deepLinkApplied.current = true;
+    const wanted = new URLSearchParams(window.location.search).get("m");
+    if (!wanted) return;
+    const target = manifests.find((m) => m.message_id === wanted);
+    if (!target) return;  // stale or wrong-client link — leave the default view alone
+    // A linked manifest is often already processed by the time someone clicks
+    // through from their inbox, so land on whichever tab actually holds it.
+    setFilter(isPending(target) ? "new" : "processed");
+    setSelectedId(wanted);
+  }, [manifests]);
+
+  // Keep the address bar in step with the selection so the URL is always
+  // shareable/copyable. replaceState, not pushState — clicking through a list
+  // shouldn't stack up dozens of back-button entries.
+  useEffect(() => {
+    if (!selectedId) return;
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("m") === selectedId) return;
+    url.searchParams.set("m", selectedId);
+    window.history.replaceState(null, "", url);
+  }, [selectedId]);
+
   const selected = visible.find((m) => m.message_id === selectedId) ?? null;
 
   function handleProcessed(messageId: string) {
@@ -396,10 +554,18 @@ export default function Page() {
           <span style={{ color: "var(--rule)" }}>/</span>
           <span className="font-bold" style={{ color: "var(--ink)" }}>Manifest Review</span>
         </div>
-        <div className="ml-auto flex items-center gap-3">
+        <div className="ml-auto flex items-center gap-3 relative">
+          <button
+            onClick={() => setShowRecipients((v) => !v)}
+            className="text-xs font-bold uppercase tracking-wide px-3 py-1.5 rounded-sm"
+            style={{ border: "1px solid var(--rule)", color: showRecipients ? "var(--accent)" : "var(--ink-soft)" }}
+          >
+            Recipients
+          </button>
           <button onClick={load} className="text-xs font-bold uppercase tracking-wide px-3 py-1.5 rounded-sm" style={{ border: "1px solid var(--rule)", color: "var(--ink-soft)" }}>
             Refresh
           </button>
+          {showRecipients && <RecipientsPanel />}
         </div>
       </header>
 
