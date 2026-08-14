@@ -26,6 +26,7 @@ export type ManifestJob = {
   message_id: string;
   processed_at: string;
   pdf_url: string;
+  pdf_job_numbers: string[];
   collection_point: string;
   collection_postcode: string;
   delivery_point: string;
@@ -70,6 +71,7 @@ function rowToJob(r: Record<string, any>): ManifestJob {
     message_id: String(r.message_id ?? ""),
     processed_at: r.processed_at ? String(r.processed_at) : "",
     pdf_url: String(r.pdf_url ?? ""),
+    pdf_job_numbers: Array.isArray(r.pdf_job_numbers) ? r.pdf_job_numbers.map(String) : [],
     collection_point: String(r.collection_point ?? ""),
     collection_postcode: String(r.collection_postcode ?? ""),
     delivery_point: String(r.delivery_point ?? ""),
@@ -140,7 +142,7 @@ function buildManifest(msgId: string, jobs: ManifestJob[]): Manifest {
 // ── Queries ──────────────────────────────────────────────────────────────────
 
 const SELECT_COLS = `
-  job_number, client_name, message_id, processed_at, pdf_url,
+  job_number, client_name, message_id, processed_at, pdf_url, pdf_job_numbers,
   collection_point, collection_postcode, delivery_point, delivery_postcode,
   price, order_number,
   collection_date, collection_time, delivery_date, delivery_time,
