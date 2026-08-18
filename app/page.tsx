@@ -25,8 +25,20 @@ function isPending(m: Manifest): boolean {
   return m.jobs.some((j) => !j.review_action);
 }
 
+/**
+ * The true count of jobs DS Smith put on this booking form, not just the
+ * ones that landed on this particular email. pdf_job_numbers is the full
+ * list the pipeline saw on the PDF; falls back to the manifest's own job
+ * count for older rows ingested before that column existed.
+ */
+function pdfJobCount(m: Manifest): number {
+  const pdfNumbers = m.jobs.find((j) => j.pdf_job_numbers.length > 0)?.pdf_job_numbers;
+  if (!pdfNumbers) return m.jobs.length;
+  return new Set([...pdfNumbers, ...m.jobs.map((j) => j.job_number)]).size;
+}
+
 function ManifestRow({ manifest, active, onClick }: { manifest: Manifest; active: boolean; onClick: () => void }) {
-  const jobCount = manifest.jobs.length;
+  const jobCount = pdfJobCount(manifest);
   return (
     <button
       onClick={onClick}
@@ -141,34 +153,33 @@ function OrderCheckRow({
 
 function otherJobStatus(job: OtherPdfJob): string {
   if (!job.found) return "not on file";
-  if (job.review_action) return `${job.review_action.toLowerCase()}, on another email`;
-  return "pending review on another email";
+  if (job.review_action) return `${job.review_action}, handled on another email`;
+  return "awaiting review on another email";
 }
 
-function OtherJobsHint({ jobs }: { jobs: OtherPdfJob[] }) {
-  const [expanded, setExpanded] = useState(false);
+/**
+ * A job from this PDF that isn't part of this email's own job list — dedup
+ * already filed it under an earlier email, so it's read-only here: shown for
+ * context (this is why the form's total looks bigger than this list), never
+ * checkable, so a reviewer can't re-action something already decided.
+ */
+function OtherJobRow({ job }: { job: OtherPdfJob }) {
   return (
     <div
-      className="shrink-0 px-3 py-2 text-[11px] leading-snug"
-      style={{ background: "var(--accent-tint)", borderBottom: "1px solid var(--rule)", color: "var(--ink-soft)" }}
+      className="flex items-start gap-2.5 px-3 py-2.5"
+      style={{ borderBottom: "1px solid var(--rule)", background: "var(--paper-raised)" }}
+      title="This job was on the same booking form but belongs to a different email — view-only here"
     >
-      <button
-        onClick={() => setExpanded((v) => !v)}
-        className="w-full text-left cursor-pointer"
+      <div
+        className="mt-0.5 size-4 shrink-0 rounded-sm flex items-center justify-center"
+        style={{ border: "1px solid var(--rule)", color: "var(--label)", fontSize: 10 }}
       >
-        This PDF also lists {jobs.length} other job{jobs.length === 1 ? "" : "s"} not shown below{" "}
-        <span className="tabular">{expanded ? "▾" : "▸"}</span>
-      </button>
-      {expanded && (
-        <div className="mt-1.5 space-y-0.5">
-          {jobs.map((j) => (
-            <div key={j.job_number} className="flex items-center justify-between gap-2">
-              <span className="tabular font-semibold">{j.job_number}</span>
-              <span>{otherJobStatus(j)}</span>
-            </div>
-          ))}
-        </div>
-      )}
+        ○
+      </div>
+      <div className="min-w-0 flex-1">
+        <span className="tabular text-sm font-semibold" style={{ color: "var(--label)" }}>{job.job_number}</span>
+        <div className="text-[11px] truncate" style={{ color: "var(--label)" }}>{otherJobStatus(job)}</div>
+      </div>
     </div>
   );
 }
@@ -196,6 +207,16 @@ function ManifestDetail({
   const [pdfHeight, setPdfHeight] = useState<number | null>(null);
   const dragState = useRef<{ startY: number; startHeight: number } | null>(null);
   const [otherJobs, setOtherJobs] = useState<OtherPdfJob[]>([]);
+
+  // Full booking-form job list, own (checkable) jobs and other-email (read-only)
+  // jobs interleaved by job number, so the panel always matches what's actually
+  // printed on the PDF instead of silently showing a subset.
+  type Row = { job_number: string } & ({ kind: "own"; job: ManifestJob } | { kind: "other"; job: OtherPdfJob });
+  const rows: Row[] = useMemo(() => {
+    const own: Row[] = manifest.jobs.map((job) => ({ kind: "own" as const, job, job_number: job.job_number }));
+    const other: Row[] = otherJobs.map((job) => ({ kind: "other" as const, job, job_number: job.job_number }));
+    return [...own, ...other].sort((a, b) => a.job_number.localeCompare(b.job_number));
+  }, [manifest.jobs, otherJobs]);
 
   useEffect(() => {
     setCheckedJobs(new Set(pendingJobs.map((j) => j.job_number)));
@@ -317,22 +338,28 @@ function ManifestDetail({
         {/* Order checklist */}
         <div className="w-80 shrink-0 flex flex-col min-h-0">
           <div className="shrink-0 px-3 py-2.5" style={{ borderBottom: "1px solid var(--rule)", background: "var(--paper-raised)" }}>
-            <span className="text-[11px] font-bold uppercase tracking-widest" style={{ color: "var(--label)" }}>Order numbers</span>
+            <span className="text-[11px] font-bold uppercase tracking-widest" style={{ color: "var(--label)" }}>
+              Order numbers
+            </span>
+            <span className="text-[11px] tabular ml-1.5" style={{ color: "var(--label)" }}>
+              ({rows.length} on this form{otherJobs.length > 0 ? `, ${otherJobs.length} handled elsewhere` : ""})
+            </span>
           </div>
-          {otherJobs.length > 0 && (
-            <OtherJobsHint jobs={otherJobs} />
-          )}
           <div className="flex-1 overflow-y-auto">
-            {manifest.jobs.map((job) => (
-              <OrderCheckRow
-                key={job.job_number}
-                job={job}
-                checked={checkedJobs.has(job.job_number)}
-                expanded={expandedJob === job.job_number}
-                onToggle={() => toggle(job.job_number)}
-                onToggleExpand={() => setExpandedJob((prev) => (prev === job.job_number ? null : job.job_number))}
-              />
-            ))}
+            {rows.map((row) =>
+              row.kind === "own" ? (
+                <OrderCheckRow
+                  key={row.job_number}
+                  job={row.job}
+                  checked={checkedJobs.has(row.job_number)}
+                  expanded={expandedJob === row.job_number}
+                  onToggle={() => toggle(row.job_number)}
+                  onToggleExpand={() => setExpandedJob((prev) => (prev === row.job_number ? null : row.job_number))}
+                />
+              ) : (
+                <OtherJobRow key={row.job_number} job={row.job} />
+              )
+            )}
           </div>
           <div className="shrink-0 px-3 py-3" style={{ borderTop: "1px solid var(--rule)", background: "var(--paper-raised)" }}>
             {error && <div className="text-xs mb-2" style={{ color: "var(--cancel)" }}>{error}</div>}
