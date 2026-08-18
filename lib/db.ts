@@ -212,6 +212,19 @@ export type OtherJob = {
   job_number: string;
   message_id: string;
   review_action: ManifestAction | "";
+  review_action_by: string;
+  review_action_at: string;
+  collection_point: string;
+  collection_postcode: string;
+  delivery_point: string;
+  delivery_postcode: string;
+  price: string;
+  order_number: string;
+  collection_date: string;
+  collection_time: string;
+  delivery_date: string;
+  delivery_time: string;
+  email_subject: string;
 };
 
 /**
@@ -220,19 +233,38 @@ export type OtherJob = {
  * that were already ingested from an earlier email and so were dropped by
  * dedup before reaching this manifest. Looked up by job number across the
  * whole table (not scoped to message_id) since that's exactly where an
- * already-seen job would have been written.
+ * already-seen job would have been written. Pulls the same extracted fields
+ * as a manifest's own jobs so the reviewer can see real order detail, not
+ * just a bare job number, for every job printed on the form.
  */
 export async function getKnownJobs(jobNumbers: string[]): Promise<OtherJob[]> {
   if (jobNumbers.length === 0) return [];
   const pool = getPool();
   const { rows } = await pool.query(
-    `SELECT job_number, message_id, review_action FROM st_regis_orders WHERE job_number = ANY($1)`,
+    `SELECT job_number, message_id, review_action, review_action_by, review_action_at,
+            collection_point, collection_postcode, delivery_point, delivery_postcode,
+            price, order_number, collection_date, collection_time, delivery_date, delivery_time,
+            email_subject
+     FROM st_regis_orders WHERE job_number = ANY($1)`,
     [jobNumbers]
   );
   return rows.map((r) => ({
     job_number: String(r.job_number ?? ""),
     message_id: String(r.message_id ?? ""),
     review_action: (r.review_action as ManifestAction) || "",
+    review_action_by: String(r.review_action_by ?? ""),
+    review_action_at: r.review_action_at ? String(r.review_action_at) : "",
+    collection_point: String(r.collection_point ?? ""),
+    collection_postcode: String(r.collection_postcode ?? ""),
+    delivery_point: String(r.delivery_point ?? ""),
+    delivery_postcode: String(r.delivery_postcode ?? ""),
+    price: String(r.price ?? ""),
+    order_number: String(r.order_number ?? ""),
+    collection_date: String(r.collection_date ?? ""),
+    collection_time: String(r.collection_time ?? ""),
+    delivery_date: String(r.delivery_date ?? ""),
+    delivery_time: String(r.delivery_time ?? ""),
+    email_subject: String(r.email_subject ?? ""),
   }));
 }
 
