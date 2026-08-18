@@ -610,23 +610,41 @@ export default function Page() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible]);
 
-  // Open straight onto one manifest from ?m=<message_id> — the link the
-  // notification email sends the Firmin team. Declared AFTER the auto-select
-  // effect above on purpose: both run in the same flush once manifests land,
-  // and the later setSelectedId wins, otherwise auto-select would immediately
-  // bounce us to visible[0].
+  // Open straight onto one manifest from the notification email's link.
+  //
+  // ?job=<job_number> is what notifications now send, and it is preferred
+  // because message_id is NOT a stable identity for a manifest — a job's row
+  // gets re-keyed onto whichever email last touched it (DS Smith re-send the
+  // same growing PDF, and sheet backfills stamp historical ids back over
+  // current ones), so ?m= links were being invalidated within seconds of being
+  // emailed. Job numbers are the primary key and never move.
+  //
+  // ?m= is still honoured for links already sent and for URLs copied out of
+  // the address bar.
+  //
+  // Declared AFTER the auto-select effect above on purpose: both run in the
+  // same flush once manifests land, and the later setSelectedId wins,
+  // otherwise auto-select would immediately bounce us to visible[0].
   const deepLinkApplied = useRef(false);
   useEffect(() => {
     if (deepLinkApplied.current || manifests.length === 0) return;
     deepLinkApplied.current = true;
-    const wanted = new URLSearchParams(window.location.search).get("m");
-    if (!wanted) return;
-    const target = manifests.find((m) => m.message_id === wanted);
+
+    const params = new URLSearchParams(window.location.search);
+    const wantedJob = params.get("job");
+    const wantedMsg = params.get("m");
+
+    const target =
+      (wantedJob && manifests.find((m) => m.jobs.some((j) => j.job_number === wantedJob))) ||
+      (wantedMsg && manifests.find((m) => m.message_id === wantedMsg)) ||
+      null;
     if (!target) return;  // stale or wrong-client link — leave the default view alone
+
     // A linked manifest is often already processed by the time someone clicks
     // through from their inbox, so land on whichever tab actually holds it.
     setFilter(isPending(target) ? "new" : "processed");
-    setSelectedId(wanted);
+    // target.message_id, not the raw param — with ?job= the two differ.
+    setSelectedId(target.message_id);
   }, [manifests]);
 
   // Keep the address bar in step with the selection so the URL is always
@@ -637,6 +655,9 @@ export default function Page() {
     const url = new URL(window.location.href);
     if (url.searchParams.get("m") === selectedId) return;
     url.searchParams.set("m", selectedId);
+    // Drop ?job= once resolved, so the URL is canonical and copying it out of
+    // the address bar can't hand someone a stale job pointer.
+    url.searchParams.delete("job");
     window.history.replaceState(null, "", url);
   }, [selectedId]);
 
