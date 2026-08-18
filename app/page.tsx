@@ -263,14 +263,19 @@ function ManifestDetail({
   const dragState = useRef<{ startY: number; startHeight: number } | null>(null);
   const [otherJobs, setOtherJobs] = useState<OtherPdfJob[]>([]);
 
-  // Full booking-form job list, own (checkable) jobs and other-email (read-only)
-  // jobs interleaved by job number, so the panel always matches what's actually
-  // printed on the PDF instead of silently showing a subset.
+  // Full booking-form job list. This email's own jobs always come first (sorted
+  // among themselves), since those are what the reviewer is actually here to
+  // action — other-PDF jobs (read-only, already handled or pending elsewhere)
+  // follow after, sorted among themselves too.
   type Row = { job_number: string } & ({ kind: "own"; job: ManifestJob } | { kind: "other"; job: OtherPdfJob });
   const rows: Row[] = useMemo(() => {
-    const own: Row[] = manifest.jobs.map((job) => ({ kind: "own" as const, job, job_number: job.job_number }));
-    const other: Row[] = otherJobs.map((job) => ({ kind: "other" as const, job, job_number: job.job_number }));
-    return [...own, ...other].sort((a, b) => a.job_number.localeCompare(b.job_number));
+    const own: Row[] = manifest.jobs
+      .map((job) => ({ kind: "own" as const, job, job_number: job.job_number }))
+      .sort((a, b) => a.job_number.localeCompare(b.job_number));
+    const other: Row[] = otherJobs
+      .map((job) => ({ kind: "other" as const, job, job_number: job.job_number }))
+      .sort((a, b) => a.job_number.localeCompare(b.job_number));
+    return [...own, ...other];
   }, [manifest.jobs, otherJobs]);
 
   useEffect(() => {
