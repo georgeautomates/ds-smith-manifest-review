@@ -20,6 +20,9 @@ export type ManifestAction = "Add" | "Update" | "Cancel" | "Ignore";
 // still pick one of the four real ManifestAction values themselves.
 export type SuggestedAction = ManifestAction | "Review";
 
+/** One field the re-read PDF disagrees with on a job already on file. */
+export type PendingChange = { field: string; previous: string; current: string };
+
 export type ManifestJob = {
   job_number: string;
   client_name: string;
@@ -27,6 +30,7 @@ export type ManifestJob = {
   processed_at: string;
   pdf_url: string;
   pdf_job_numbers: string[];
+  pending_changes: PendingChange[];
   collection_point: string;
   collection_postcode: string;
   delivery_point: string;
@@ -72,6 +76,7 @@ function rowToJob(r: Record<string, any>): ManifestJob {
     processed_at: r.processed_at ? String(r.processed_at) : "",
     pdf_url: String(r.pdf_url ?? ""),
     pdf_job_numbers: Array.isArray(r.pdf_job_numbers) ? r.pdf_job_numbers.map(String) : [],
+    pending_changes: Array.isArray(r.pending_changes) ? (r.pending_changes as PendingChange[]) : [],
     collection_point: String(r.collection_point ?? ""),
     collection_postcode: String(r.collection_postcode ?? ""),
     delivery_point: String(r.delivery_point ?? ""),
@@ -143,6 +148,7 @@ function buildManifest(msgId: string, jobs: ManifestJob[]): Manifest {
 
 const SELECT_COLS = `
   job_number, client_name, message_id, processed_at, pdf_url, pdf_job_numbers,
+  pending_changes,
   collection_point, collection_postcode, delivery_point, delivery_postcode,
   price, order_number,
   collection_date, collection_time, delivery_date, delivery_time,

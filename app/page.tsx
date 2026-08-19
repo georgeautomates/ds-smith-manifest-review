@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
-import type { Manifest, ManifestJob, ManifestAction, Recipient } from "@/lib/db";
+import type { Manifest, ManifestJob, ManifestAction, Recipient, PendingChange } from "@/lib/db";
 
 type OtherPdfJob = {
   job_number: string;
@@ -81,13 +81,43 @@ function ManifestRow({ manifest, active, onClick }: { manifest: Manifest; active
   );
 }
 
-function ExtractionField({ label, value, sub }: { label: string; value: string; sub?: string }) {
+/** Pick this field's entries out of a job's pending_changes, in the order given. */
+function changesFor(job: ManifestJob, ...fields: string[]): PendingChange[] {
+  return fields
+    .map((f) => job.pending_changes.find((c) => c.field === f))
+    .filter((c): c is PendingChange => Boolean(c));
+}
+
+function ExtractionField({
+  label,
+  value,
+  sub,
+  changes,
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+  changes?: PendingChange[];
+}) {
+  const changed = !!changes && changes.length > 0;
   return (
     <div>
       <div className="text-[9px] font-bold uppercase tracking-widest" style={{ color: "var(--label)" }}>{label}</div>
-      <div className="tabular text-xs font-semibold" style={{ color: "var(--ink)" }}>
-        {value || <span style={{ color: "var(--label)" }}>—</span>}
+      {/* On a changed field the STORED value is stale. The pipeline skips any job it
+          has already seen, so the row still holds whatever the first manifest said,
+          and only the re-read PDF knows the amendment. Lead with the new value and
+          strike the old one, otherwise a reviewer acts on details DS Smith already
+          superseded. */}
+      <div className="tabular text-xs font-semibold" style={{ color: changed ? "var(--accent)" : "var(--ink)" }}>
+        {changed
+          ? changes.map((c) => c.current || "(blank)").join(" ")
+          : value || <span style={{ color: "var(--label)" }}>—</span>}
       </div>
+      {changed && (
+        <div className="tabular text-[10px] line-through" style={{ color: "var(--label)" }}>
+          {changes.map((c) => c.previous || "(blank)").join(" ")}
+        </div>
+      )}
       {sub && <div className="tabular text-[10px]" style={{ color: "var(--label)" }}>{sub}</div>}
     </div>
   );
@@ -159,11 +189,11 @@ function OrderCheckRow({
       </div>
       {expanded && (
         <div className="px-3 pb-3 grid grid-cols-2 gap-2" style={{ background: "var(--paper-raised)" }}>
-          <ExtractionField label="Collection" value={job.collection_point} sub={job.collection_postcode} />
-          <ExtractionField label="Delivery" value={job.delivery_point} sub={job.delivery_postcode} />
-          <ExtractionField label="Collection date/time" value={`${job.collection_date} ${job.collection_time}`.trim()} />
-          <ExtractionField label="Delivery date/time" value={`${job.delivery_date} ${job.delivery_time}`.trim()} />
-          <ExtractionField label="Price" value={job.price} />
+          <ExtractionField label="Collection" value={job.collection_point} sub={job.collection_postcode} changes={changesFor(job, "collection_point")} />
+          <ExtractionField label="Delivery" value={job.delivery_point} sub={job.delivery_postcode} changes={changesFor(job, "delivery_point")} />
+          <ExtractionField label="Collection date/time" value={`${job.collection_date} ${job.collection_time}`.trim()} changes={changesFor(job, "collection_date", "collection_time")} />
+          <ExtractionField label="Delivery date/time" value={`${job.delivery_date} ${job.delivery_time}`.trim()} changes={changesFor(job, "delivery_date", "delivery_time")} />
+          <ExtractionField label="Price" value={job.price} changes={changesFor(job, "price")} />
           <ExtractionField label="Order number" value={job.order_number} />
           <ExtractionField label="Work type" value={job.work_type} />
           <ExtractionField label="Booking window" value={job.booking_window} />
