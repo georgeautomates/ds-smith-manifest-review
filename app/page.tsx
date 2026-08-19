@@ -128,6 +128,16 @@ function OrderCheckRow({
               Suggested: {job.suggested_action}
             </div>
           ) : null}
+          {/* The reason, not just the verdict. On an Update this carries the actual
+              field-level diff ("delivery_date: 17/08/2026 -> 18/08/2026"), which is the
+              only place the OLD value exists — the row itself already shows the new one.
+              The Client Portal RPA has no update path, so applying an amendment is a
+              human job, and it cannot be done from a badge that says "Update" alone. */}
+          {job.suggested_reason && (
+            <div className="text-[10px] mt-0.5 leading-snug" style={{ color: "var(--ink-soft)" }}>
+              {job.suggested_reason}
+            </div>
+          )}
           {job.review_action && (
             <div className="text-[10px] font-bold uppercase tracking-wide mt-0.5" style={{ color: "var(--ignore)" }}>
               Already {job.review_action}
