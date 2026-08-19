@@ -468,14 +468,23 @@ function ManifestDetail({
           </div>
           <div className="shrink-0 px-3 py-3" style={{ borderTop: "1px solid var(--rule)", background: "var(--paper-raised)" }}>
             {error && <div className="text-xs mb-2" style={{ color: "var(--cancel)" }}>{error}</div>}
+            {/* Deliberately NOT called "Process". Nothing downstream reads review_action
+                yet: the RPA is not gated on it, and the Client Portal has no update path
+                at all, so an Update is always applied by hand in Proteo. A button
+                promising to process would have someone skip that manual step and send a
+                truck to the wrong place. It promises less than it delivers on purpose,
+                and gets renamed the day it actually triggers something. */}
             <button
               onClick={handleProcess}
               disabled={processing || pendingJobs.length === 0}
               className="w-full py-2.5 rounded-sm font-bold text-sm transition-colors disabled:opacity-40"
               style={{ background: "var(--accent)", color: "var(--accent-ink)" }}
             >
-              {processing ? "Processing…" : pendingJobs.length === 0 ? "Already processed" : "Process"}
+              {processing ? "Saving…" : pendingJobs.length === 0 ? "All decisions recorded" : "Mark as handled"}
             </button>
+            <div className="text-[10px] mt-1.5 leading-snug text-center" style={{ color: "var(--label)" }}>
+              Records your decision. Add and update the order in Proteo yourself.
+            </div>
           </div>
         </div>
       </div>
@@ -714,7 +723,7 @@ export default function Page() {
     // Re-fetch to pick up the real actions/timestamps written server-side.
     load();
     setFilter("new");
-    showToast(`${jobNumbers.length} order${jobNumbers.length === 1 ? "" : "s"} processed`);
+    showToast(`${jobNumbers.length} decision${jobNumbers.length === 1 ? "" : "s"} recorded`);
   }
 
   return (
@@ -772,7 +781,7 @@ export default function Page() {
             <div className="flex-1 overflow-y-auto">
               {visible.length === 0 ? (
                 <div className="px-4 py-8 text-center text-sm" style={{ color: "var(--label)" }}>
-                  {filter === "new" ? "No orders need to process." : "Nothing processed yet."}
+                  {filter === "new" ? "Nothing waiting for review." : "Nothing recorded yet."}
                 </div>
               ) : (
                 visible.map((m) => (
@@ -792,7 +801,7 @@ export default function Page() {
             <ManifestDetail manifest={selected} onProcessed={handleProcessed} />
           ) : (
             <div className="flex-1 flex items-center justify-center text-sm" style={{ color: "var(--label)" }}>
-              {filter === "new" ? "No orders need to process." : "Select a manifest to view it."}
+              {filter === "new" ? "Nothing waiting for review." : "Select a manifest to view it."}
             </div>
           )}
         </div>
