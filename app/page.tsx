@@ -82,13 +82,43 @@ function ManifestRow({ manifest, active, onClick }: { manifest: Manifest; active
   );
 }
 
-function ExtractionField({ label, value, sub }: { label: string; value: string; sub?: string }) {
+/** Pick this field's entries out of a job's pending_changes, in the order given. */
+function changesFor(job: ManifestJob, ...fields: string[]): PendingChange[] {
+  return fields
+    .map((f) => job.pending_changes.find((c) => c.field === f))
+    .filter((c): c is PendingChange => Boolean(c));
+}
+
+function ExtractionField({
+  label,
+  value,
+  sub,
+  changes,
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+  changes?: PendingChange[];
+}) {
+  const changed = !!changes && changes.length > 0;
   return (
     <div>
       <div className="text-[9px] font-bold uppercase tracking-widest" style={{ color: "var(--label)" }}>{label}</div>
-      <div className="tabular text-xs font-semibold" style={{ color: "var(--ink)" }}>
-        {value || <span style={{ color: "var(--label)" }}>—</span>}
+      {/* On a changed field the STORED value is stale. The pipeline skips any job it
+          has already seen, so the row still holds whatever the first manifest said,
+          and only the re-read PDF knows the amendment. Lead with the new value and
+          strike the old one, otherwise a reviewer acts on details DS Smith already
+          superseded. */}
+      <div className="tabular text-xs font-semibold" style={{ color: changed ? "var(--accent)" : "var(--ink)" }}>
+        {changed
+          ? changes.map((c) => c.current || "(blank)").join(" ")
+          : value || <span style={{ color: "var(--label)" }}>—</span>}
       </div>
+      {changed && (
+        <div className="tabular text-[10px] line-through" style={{ color: "var(--label)" }}>
+          {changes.map((c) => c.previous || "(blank)").join(" ")}
+        </div>
+      )}
       {sub && <div className="tabular text-[10px]" style={{ color: "var(--label)" }}>{sub}</div>}
     </div>
   );
@@ -125,6 +155,12 @@ function CorrectableExtractionField({
   const [error, setError] = useState("");
 
   const fieldChanges = pendingChanges.filter((c) => c.field === fieldKey && c.source === "human_correction");
+  // A system-detected diff (source unset — see the PendingChange docstring)
+  // means the STORED value is stale: the pipeline skips re-writing a job
+  // it's already seen, so a re-sent manifest's new value only exists here,
+  // never in the row itself. Lead with that, not the stale `value` prop.
+  const systemChange = pendingChanges.find((c) => c.field === fieldKey && !c.source);
+  const displayValue = systemChange ? systemChange.current : value;
 
   async function handlePropose() {
     if (!reason.trim() || !newValue.trim()) return;
@@ -194,9 +230,14 @@ function CorrectableExtractionField({
           {open ? "cancel" : "correct"}
         </button>
       </div>
-      <div className="tabular text-xs font-semibold" style={{ color: "var(--ink)" }}>
-        {value || <span style={{ color: "var(--label)" }}>—</span>}
+      <div className="tabular text-xs font-semibold" style={{ color: systemChange ? "var(--accent)" : "var(--ink)" }}>
+        {displayValue || <span style={{ color: "var(--label)" }}>—</span>}
       </div>
+      {systemChange && (
+        <div className="tabular text-[10px] line-through" style={{ color: "var(--label)" }}>
+          {systemChange.previous || "(blank)"}
+        </div>
+      )}
       {sub && <div className="tabular text-[10px]" style={{ color: "var(--label)" }}>{sub}</div>}
 
       {fieldChanges.length > 0 && (
@@ -300,6 +341,16 @@ function OrderCheckRow({
               Suggested: {job.suggested_action}
             </div>
           ) : null}
+          {/* The reason, not just the verdict. On an Update this carries the actual
+              field-level diff ("delivery_date: 17/08/2026 -> 18/08/2026"), which is the
+              only place the OLD value exists — the row itself already shows the new one.
+              The Client Portal RPA has no update path, so applying an amendment is a
+              human job, and it cannot be done from a badge that says "Update" alone. */}
+          {job.suggested_reason && (
+            <div className="text-[10px] mt-0.5 leading-snug" style={{ color: "var(--ink-soft)" }}>
+              {job.suggested_reason}
+            </div>
+          )}
           {job.review_action && (
             <div className="text-[10px] font-bold uppercase tracking-wide mt-0.5" style={{ color: "var(--ignore)" }}>
               Already {job.review_action}
@@ -325,8 +376,8 @@ function OrderCheckRow({
             jobNumber={job.job_number} pendingChanges={pendingChanges} onProposed={onCorrectionChanged} />
           <CorrectableExtractionField label="Delivery" fieldKey="delivery_point" value={job.delivery_point} sub={job.delivery_postcode}
             jobNumber={job.job_number} pendingChanges={pendingChanges} onProposed={onCorrectionChanged} />
-          <ExtractionField label="Collection date/time" value={`${job.collection_date} ${job.collection_time}`.trim()} />
-          <ExtractionField label="Delivery date/time" value={`${job.delivery_date} ${job.delivery_time}`.trim()} />
+          <ExtractionField label="Collection date/time" value={`${job.collection_date} ${job.collection_time}`.trim()} changes={changesFor(job, "collection_date", "collection_time")} />
+          <ExtractionField label="Delivery date/time" value={`${job.delivery_date} ${job.delivery_time}`.trim()} changes={changesFor(job, "delivery_date", "delivery_time")} />
           <CorrectableExtractionField label="Price" fieldKey="price" value={job.price}
             jobNumber={job.job_number} pendingChanges={pendingChanges} onProposed={onCorrectionChanged} />
           <CorrectableExtractionField label="Order number" fieldKey="order_number" value={job.order_number}
@@ -631,14 +682,23 @@ function ManifestDetail({
           </div>
           <div className="shrink-0 px-3 py-3" style={{ borderTop: "1px solid var(--rule)", background: "var(--paper-raised)" }}>
             {error && <div className="text-xs mb-2" style={{ color: "var(--cancel)" }}>{error}</div>}
+            {/* Deliberately NOT called "Process". Nothing downstream reads review_action
+                yet: the RPA is not gated on it, and the Client Portal has no update path
+                at all, so an Update is always applied by hand in Proteo. A button
+                promising to process would have someone skip that manual step and send a
+                truck to the wrong place. It promises less than it delivers on purpose,
+                and gets renamed the day it actually triggers something. */}
             <button
               onClick={handleProcess}
               disabled={processing || pendingJobs.length === 0}
               className="w-full py-2.5 rounded-sm font-bold text-sm transition-colors disabled:opacity-40"
               style={{ background: "var(--accent)", color: "var(--accent-ink)" }}
             >
-              {processing ? "Processing…" : pendingJobs.length === 0 ? "Already processed" : "Process"}
+              {processing ? "Saving…" : pendingJobs.length === 0 ? "All decisions recorded" : "Mark as handled"}
             </button>
+            <div className="text-[10px] mt-1.5 leading-snug text-center" style={{ color: "var(--label)" }}>
+              Records your decision. Add and update the order in Proteo yourself.
+            </div>
           </div>
         </div>
       </div>
@@ -813,23 +873,41 @@ export default function Page() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible]);
 
-  // Open straight onto one manifest from ?m=<message_id> — the link the
-  // notification email sends the Firmin team. Declared AFTER the auto-select
-  // effect above on purpose: both run in the same flush once manifests land,
-  // and the later setSelectedId wins, otherwise auto-select would immediately
-  // bounce us to visible[0].
+  // Open straight onto one manifest from the notification email's link.
+  //
+  // ?job=<job_number> is what notifications now send, and it is preferred
+  // because message_id is NOT a stable identity for a manifest — a job's row
+  // gets re-keyed onto whichever email last touched it (DS Smith re-send the
+  // same growing PDF, and sheet backfills stamp historical ids back over
+  // current ones), so ?m= links were being invalidated within seconds of being
+  // emailed. Job numbers are the primary key and never move.
+  //
+  // ?m= is still honoured for links already sent and for URLs copied out of
+  // the address bar.
+  //
+  // Declared AFTER the auto-select effect above on purpose: both run in the
+  // same flush once manifests land, and the later setSelectedId wins,
+  // otherwise auto-select would immediately bounce us to visible[0].
   const deepLinkApplied = useRef(false);
   useEffect(() => {
     if (deepLinkApplied.current || manifests.length === 0) return;
     deepLinkApplied.current = true;
-    const wanted = new URLSearchParams(window.location.search).get("m");
-    if (!wanted) return;
-    const target = manifests.find((m) => m.message_id === wanted);
+
+    const params = new URLSearchParams(window.location.search);
+    const wantedJob = params.get("job");
+    const wantedMsg = params.get("m");
+
+    const target =
+      (wantedJob && manifests.find((m) => m.jobs.some((j) => j.job_number === wantedJob))) ||
+      (wantedMsg && manifests.find((m) => m.message_id === wantedMsg)) ||
+      null;
     if (!target) return;  // stale or wrong-client link — leave the default view alone
+
     // A linked manifest is often already processed by the time someone clicks
     // through from their inbox, so land on whichever tab actually holds it.
     setFilter(isPending(target) ? "new" : "processed");
-    setSelectedId(wanted);
+    // target.message_id, not the raw param — with ?job= the two differ.
+    setSelectedId(target.message_id);
   }, [manifests]);
 
   // Keep the address bar in step with the selection so the URL is always
@@ -840,6 +918,9 @@ export default function Page() {
     const url = new URL(window.location.href);
     if (url.searchParams.get("m") === selectedId) return;
     url.searchParams.set("m", selectedId);
+    // Drop ?job= once resolved, so the URL is canonical and copying it out of
+    // the address bar can't hand someone a stale job pointer.
+    url.searchParams.delete("job");
     window.history.replaceState(null, "", url);
   }, [selectedId]);
 
@@ -856,7 +937,7 @@ export default function Page() {
     // Re-fetch to pick up the real actions/timestamps written server-side.
     load();
     setFilter("new");
-    showToast(`${jobNumbers.length} order${jobNumbers.length === 1 ? "" : "s"} processed`);
+    showToast(`${jobNumbers.length} decision${jobNumbers.length === 1 ? "" : "s"} recorded`);
   }
 
   return (
@@ -914,7 +995,7 @@ export default function Page() {
             <div className="flex-1 overflow-y-auto">
               {visible.length === 0 ? (
                 <div className="px-4 py-8 text-center text-sm" style={{ color: "var(--label)" }}>
-                  {filter === "new" ? "No orders need to process." : "Nothing processed yet."}
+                  {filter === "new" ? "Nothing waiting for review." : "Nothing recorded yet."}
                 </div>
               ) : (
                 visible.map((m) => (
@@ -934,7 +1015,7 @@ export default function Page() {
             <ManifestDetail manifest={selected} onProcessed={handleProcessed} />
           ) : (
             <div className="flex-1 flex items-center justify-center text-sm" style={{ color: "var(--label)" }}>
-              {filter === "new" ? "No orders need to process." : "Select a manifest to view it."}
+              {filter === "new" ? "Nothing waiting for review." : "Select a manifest to view it."}
             </div>
           )}
         </div>

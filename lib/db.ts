@@ -31,13 +31,17 @@ export const CORRECTABLE_FIELDS = [
 ] as const;
 export type CorrectableField = (typeof CORRECTABLE_FIELDS)[number];
 
+// One entry in pending_changes: either a system-detected diff (a re-read PDF
+// disagrees with a job already on file — the pipeline skips re-writing a
+// seen job, so the stored row goes stale) or a reviewer's proposed
+// correction. Same shape for both; source tells them apart. proposed_by/
+// applied_by/proposed_at/applied_at/reason only apply to human_correction —
+// a system_resend diff has no human on either side of it.
 export type PendingChange = {
   field: string;
   previous: string;
   current: string;
-  source: "system_resend" | "human_correction";
-  // Only set for source: "human_correction" — a system_resend diff has no
-  // human on either side of it.
+  source?: "system_resend" | "human_correction";
   proposed_by?: string;
   proposed_at?: string;
   applied_by?: string;
