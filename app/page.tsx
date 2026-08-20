@@ -82,36 +82,26 @@ function ManifestRow({ manifest, active, onClick }: { manifest: Manifest; active
   );
 }
 
+// Read-only display for a field with no correction affordance. Used by the
+// "other jobs on this PDF" panel, whose rows come from a different query
+// (OtherPdfJob) that carries no pending_changes — so no diff can be shown
+// there. The manifest's own jobs use CorrectableExtractionField instead,
+// which does surface both system diffs and reviewer corrections.
 function ExtractionField({
   label,
   value,
   sub,
-  changes,
 }: {
   label: string;
   value: string;
   sub?: string;
-  changes?: PendingChange[];
 }) {
-  const changed = !!changes && changes.length > 0;
   return (
     <div>
       <div className="text-[9px] font-bold uppercase tracking-widest" style={{ color: "var(--label)" }}>{label}</div>
-      {/* On a changed field the STORED value is stale. The pipeline skips any job it
-          has already seen, so the row still holds whatever the first manifest said,
-          and only the re-read PDF knows the amendment. Lead with the new value and
-          strike the old one, otherwise a reviewer acts on details DS Smith already
-          superseded. */}
-      <div className="tabular text-xs font-semibold" style={{ color: changed ? "var(--accent)" : "var(--ink)" }}>
-        {changed
-          ? changes.map((c) => c.current || "(blank)").join(" ")
-          : value || <span style={{ color: "var(--label)" }}>—</span>}
+      <div className="tabular text-xs font-semibold" style={{ color: "var(--ink)" }}>
+        {value || <span style={{ color: "var(--label)" }}>—</span>}
       </div>
-      {changed && (
-        <div className="tabular text-[10px] line-through" style={{ color: "var(--label)" }}>
-          {changes.map((c) => c.previous || "(blank)").join(" ")}
-        </div>
-      )}
       {sub && <div className="tabular text-[10px]" style={{ color: "var(--label)" }}>{sub}</div>}
     </div>
   );
@@ -148,11 +138,19 @@ function CorrectableExtractionField({
   const [error, setError] = useState("");
 
   const fieldChanges = pendingChanges.filter((c) => c.field === fieldKey && c.source === "human_correction");
-  // A system-detected diff (source unset — see the PendingChange docstring)
-  // means the STORED value is stale: the pipeline skips re-writing a job
-  // it's already seen, so a re-sent manifest's new value only exists here,
-  // never in the row itself. Lead with that, not the stale `value` prop.
-  const systemChange = pendingChanges.find((c) => c.field === fieldKey && !c.source);
+  // A system-detected diff means the STORED value is stale: the pipeline skips
+  // re-writing a job it's already seen, so a re-sent manifest's new value only
+  // exists here, never in the row itself. Lead with that, not the stale `value`.
+  //
+  // Matched by "not a human correction" rather than "source is unset". The
+  // classifier now tags its own entries source:"system_resend" (matching what
+  // document_pending_changes_human_correction_shape.sql describes), so an
+  // unset-source test silently stops matching every new entry and quietly
+  // reverts this field to showing the superseded value. Older rows written
+  // before that tag exists have no source at all and still need to match.
+  const systemChange = pendingChanges.find(
+    (c) => c.field === fieldKey && c.source !== "human_correction",
+  );
   const displayValue = systemChange ? systemChange.current : value;
 
   async function handlePropose() {
