@@ -82,13 +82,6 @@ function ManifestRow({ manifest, active, onClick }: { manifest: Manifest; active
   );
 }
 
-/** Pick this field's entries out of a job's pending_changes, in the order given. */
-function changesFor(job: ManifestJob, ...fields: string[]): PendingChange[] {
-  return fields
-    .map((f) => job.pending_changes.find((c) => c.field === f))
-    .filter((c): c is PendingChange => Boolean(c));
-}
-
 function ExtractionField({
   label,
   value,
@@ -223,11 +216,15 @@ function CorrectableExtractionField({
         <div className="text-[9px] font-bold uppercase tracking-widest" style={{ color: "var(--label)" }}>{label}</div>
         <button
           onClick={() => { setNewValue(value); setOpen((o) => !o); }}
-          className="text-[9px] font-bold uppercase tracking-wide cursor-pointer"
-          style={{ color: "var(--label)" }}
+          className="text-[10px] font-bold uppercase tracking-wide cursor-pointer px-1.5 py-0.5 rounded-sm"
+          style={
+            open
+              ? { color: "var(--ink-soft)", background: "var(--paper)", border: "1px solid var(--rule)" }
+              : { color: "var(--accent)", background: "var(--accent-tint)", border: "1px solid var(--accent)" }
+          }
           title="Propose a correction to this field"
         >
-          {open ? "cancel" : "correct"}
+          {open ? "cancel" : "edit"}
         </button>
       </div>
       <div className="tabular text-xs font-semibold" style={{ color: systemChange ? "var(--accent)" : "var(--ink)" }}>
@@ -376,14 +373,22 @@ function OrderCheckRow({
             jobNumber={job.job_number} pendingChanges={pendingChanges} onProposed={onCorrectionChanged} />
           <CorrectableExtractionField label="Delivery" fieldKey="delivery_point" value={job.delivery_point} sub={job.delivery_postcode}
             jobNumber={job.job_number} pendingChanges={pendingChanges} onProposed={onCorrectionChanged} />
-          <ExtractionField label="Collection date/time" value={`${job.collection_date} ${job.collection_time}`.trim()} changes={changesFor(job, "collection_date", "collection_time")} />
-          <ExtractionField label="Delivery date/time" value={`${job.delivery_date} ${job.delivery_time}`.trim()} changes={changesFor(job, "delivery_date", "delivery_time")} />
+          <CorrectableExtractionField label="Collection date" fieldKey="collection_date" value={job.collection_date}
+            jobNumber={job.job_number} pendingChanges={pendingChanges} onProposed={onCorrectionChanged} />
+          <CorrectableExtractionField label="Collection time" fieldKey="collection_time" value={job.collection_time}
+            jobNumber={job.job_number} pendingChanges={pendingChanges} onProposed={onCorrectionChanged} />
+          <CorrectableExtractionField label="Delivery date" fieldKey="delivery_date" value={job.delivery_date}
+            jobNumber={job.job_number} pendingChanges={pendingChanges} onProposed={onCorrectionChanged} />
+          <CorrectableExtractionField label="Delivery time" fieldKey="delivery_time" value={job.delivery_time}
+            jobNumber={job.job_number} pendingChanges={pendingChanges} onProposed={onCorrectionChanged} />
           <CorrectableExtractionField label="Price" fieldKey="price" value={job.price}
             jobNumber={job.job_number} pendingChanges={pendingChanges} onProposed={onCorrectionChanged} />
           <CorrectableExtractionField label="Order number" fieldKey="order_number" value={job.order_number}
             jobNumber={job.job_number} pendingChanges={pendingChanges} onProposed={onCorrectionChanged} />
-          <ExtractionField label="Work type" value={job.work_type} />
-          <ExtractionField label="Booking window" value={job.booking_window} />
+          <CorrectableExtractionField label="Work type" fieldKey="work_type" value={job.work_type}
+            jobNumber={job.job_number} pendingChanges={pendingChanges} onProposed={onCorrectionChanged} />
+          <CorrectableExtractionField label="Booking window" fieldKey="booking_window" value={job.booking_window}
+            jobNumber={job.job_number} pendingChanges={pendingChanges} onProposed={onCorrectionChanged} />
           {job.traffic_note && (
             <div className="col-span-2 rounded-sm px-2 py-1.5" style={{ background: "var(--accent-tint)", border: "1px solid var(--accent)" }}>
               <div className="text-[9px] font-bold uppercase tracking-widest" style={{ color: "var(--accent)" }}>Traffic note</div>
