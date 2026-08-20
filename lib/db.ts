@@ -20,6 +20,31 @@ export type ManifestAction = "Add" | "Update" | "Cancel" | "Ignore";
 // still pick one of the four real ManifestAction values themselves.
 export type SuggestedAction = ManifestAction | "Review";
 
+// A field a reviewer is allowed to propose a correction for. Deliberately an
+// allowlist, not free-text field names — keeps corrections to fields the UI
+// actually knows how to render a diff for, and stops a malformed request from
+// writing an arbitrary key into pending_changes.
+export const CORRECTABLE_FIELDS = [
+  "collection_point", "collection_postcode", "delivery_point", "delivery_postcode",
+  "price", "order_number", "collection_date", "collection_time",
+  "delivery_date", "delivery_time", "work_type", "booking_window", "traffic_note",
+] as const;
+export type CorrectableField = (typeof CORRECTABLE_FIELDS)[number];
+
+export type PendingChange = {
+  field: string;
+  previous: string;
+  current: string;
+  source: "system_resend" | "human_correction";
+  // Only set for source: "human_correction" — a system_resend diff has no
+  // human on either side of it.
+  proposed_by?: string;
+  proposed_at?: string;
+  applied_by?: string;
+  applied_at?: string;
+  reason?: string;
+};
+
 export type ManifestJob = {
   job_number: string;
   client_name: string;
@@ -51,6 +76,7 @@ export type ManifestJob = {
   review_action_source: "suggested" | "override" | "";
   review_action_by: string;
   review_action_at: string;
+  pending_changes: PendingChange[];
 };
 
 export type Manifest = {
@@ -96,6 +122,7 @@ function rowToJob(r: Record<string, any>): ManifestJob {
     review_action_source: (r.review_action_source as "suggested" | "override") || "",
     review_action_by: String(r.review_action_by ?? ""),
     review_action_at: r.review_action_at ? String(r.review_action_at) : "",
+    pending_changes: Array.isArray(r.pending_changes) ? (r.pending_changes as PendingChange[]) : [],
   };
 }
 
@@ -149,7 +176,8 @@ const SELECT_COLS = `
   work_type, booking_window, traffic_note, composite_score, confidence_status,
   email_subject, email_received_at, email_body,
   suggested_action, suggested_reason,
-  review_action, review_action_source, review_action_by, review_action_at
+  review_action, review_action_source, review_action_by, review_action_at,
+  pending_changes
 `;
 
 /** Manifests with at least one job still awaiting a reviewer decision. Most recent first. */
@@ -289,6 +317,91 @@ export async function saveManifestAction(decision: ManifestActionDecision): Prom
      SET review_action = $1, review_action_source = $2, review_action_by = $3, review_action_at = now()
      WHERE job_number = $4`,
     [decision.action, decision.source, decision.reviewed_by, decision.job_number]
+  );
+}
+
+// ── Field corrections ────────────────────────────────────────────────────────
+//
+// A reviewer flagging that one extracted field is wrong (or that Proteo's own
+// value differs and the extraction should be trusted over it — see the price
+// mismatches found during the 2026-08-20 QA pass, where the extraction turned
+// out to be right and Proteo had the data-entry error). Two-step by design:
+// propose (this only appends to pending_changes) then a separate apply writes
+// the real column. Never overwrite collection_point/price/etc. directly from
+// a correction — see document_pending_changes_human_correction_shape.sql for
+// why that distinction matters.
+
+export type ProposeCorrectionInput = {
+  job_number: string;
+  field: CorrectableField;
+  current_value: string;
+  new_value: string;
+  reason: string;
+  proposed_by: string;
+};
+
+export async function proposeCorrection(input: ProposeCorrectionInput): Promise<void> {
+  if (!input.reason.trim()) throw new Error("A reason is required for a correction");
+  const pool = getPool();
+  const change: PendingChange = {
+    field: input.field,
+    previous: input.current_value,
+    current: input.new_value,
+    source: "human_correction",
+    proposed_by: input.proposed_by,
+    proposed_at: new Date().toISOString(),
+    applied_by: "",
+    applied_at: "",
+    reason: input.reason.trim(),
+  };
+  await pool.query(
+    `UPDATE st_regis_orders
+     SET pending_changes = pending_changes || $1::jsonb
+     WHERE job_number = $2`,
+    [JSON.stringify([change]), input.job_number]
+  );
+}
+
+export type ApplyCorrectionInput = {
+  job_number: string;
+  field: CorrectableField;
+  // Identifies which pending_changes entry to apply — matched on
+  // field + proposed_at, since a job can have more than one pending
+  // correction on the same field over time.
+  proposed_at: string;
+  applied_by: string;
+};
+
+/**
+ * Writes a previously-proposed correction into its real column, and marks
+ * that pending_changes entry as applied (applied_by/applied_at) rather than
+ * removing it — the proposal stays in the audit trail alongside the outcome.
+ */
+export async function applyCorrection(input: ApplyCorrectionInput): Promise<void> {
+  const pool = getPool();
+  const { rows } = await pool.query(
+    `SELECT pending_changes FROM st_regis_orders WHERE job_number = $1`,
+    [input.job_number]
+  );
+  if (rows.length === 0) throw new Error(`No order found for job ${input.job_number}`);
+  const changes: PendingChange[] = Array.isArray(rows[0].pending_changes) ? rows[0].pending_changes : [];
+  const target = changes.find(
+    (c) => c.field === input.field && c.proposed_at === input.proposed_at && c.source === "human_correction"
+  );
+  if (!target) throw new Error(`No matching pending correction for job ${input.job_number}, field ${input.field}`);
+  if (target.applied_at) throw new Error(`Correction for job ${input.job_number}, field ${input.field} was already applied`);
+
+  target.applied_by = input.applied_by;
+  target.applied_at = new Date().toISOString();
+
+  if (!CORRECTABLE_FIELDS.includes(input.field)) {
+    throw new Error(`Field ${input.field} is not correctable`);
+  }
+  // input.field is validated against the allowlist above, so this identifier
+  // interpolation is safe — never build this from unvalidated request input.
+  await pool.query(
+    `UPDATE st_regis_orders SET ${input.field} = $1, pending_changes = $2::jsonb WHERE job_number = $3`,
+    [target.current, JSON.stringify(changes), input.job_number]
   );
 }
 

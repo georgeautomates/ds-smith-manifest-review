@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
-import type { Manifest, ManifestJob, ManifestAction, Recipient } from "@/lib/db";
+import type { Manifest, ManifestJob, ManifestAction, Recipient, CorrectableField, PendingChange } from "@/lib/db";
+import { ensureReviewerEmail } from "@/lib/reviewer";
 
 type OtherPdfJob = {
   job_number: string;
@@ -93,18 +94,189 @@ function ExtractionField({ label, value, sub }: { label: string; value: string; 
   );
 }
 
+/**
+ * Same as ExtractionField, but for a field a reviewer can propose a
+ * correction on. Deliberately friction-y: correcting requires opening a
+ * small form and typing a reason, rather than editing the value inline —
+ * see lib/db.ts's proposeCorrection docstring for why a silent overwrite
+ * is exactly the failure mode this avoids.
+ */
+function CorrectableExtractionField({
+  label,
+  fieldKey,
+  value,
+  sub,
+  jobNumber,
+  pendingChanges,
+  onProposed,
+}: {
+  label: string;
+  fieldKey: CorrectableField;
+  value: string;
+  sub?: string;
+  jobNumber: string;
+  pendingChanges: PendingChange[];
+  onProposed: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [newValue, setNewValue] = useState(value);
+  const [reason, setReason] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  const fieldChanges = pendingChanges.filter((c) => c.field === fieldKey && c.source === "human_correction");
+
+  async function handlePropose() {
+    if (!reason.trim() || !newValue.trim()) return;
+    setSaving(true);
+    setError("");
+    try {
+      const proposedBy = ensureReviewerEmail();
+      const res = await fetch("/api/manifests/correction", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          job_number: jobNumber,
+          field: fieldKey,
+          current_value: value,
+          new_value: newValue.trim(),
+          reason: reason.trim(),
+          proposed_by: proposedBy,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error ?? "Failed to save correction");
+      setOpen(false);
+      setReason("");
+      onProposed();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to save correction");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleApply(change: PendingChange) {
+    setSaving(true);
+    setError("");
+    try {
+      const appliedBy = ensureReviewerEmail();
+      const res = await fetch("/api/manifests/correction/apply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          job_number: jobNumber,
+          field: fieldKey,
+          proposed_at: change.proposed_at,
+          applied_by: appliedBy,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error ?? "Failed to apply correction");
+      onProposed();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to apply correction");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between gap-1">
+        <div className="text-[9px] font-bold uppercase tracking-widest" style={{ color: "var(--label)" }}>{label}</div>
+        <button
+          onClick={() => { setNewValue(value); setOpen((o) => !o); }}
+          className="text-[9px] font-bold uppercase tracking-wide cursor-pointer"
+          style={{ color: "var(--label)" }}
+          title="Propose a correction to this field"
+        >
+          {open ? "cancel" : "correct"}
+        </button>
+      </div>
+      <div className="tabular text-xs font-semibold" style={{ color: "var(--ink)" }}>
+        {value || <span style={{ color: "var(--label)" }}>—</span>}
+      </div>
+      {sub && <div className="tabular text-[10px]" style={{ color: "var(--label)" }}>{sub}</div>}
+
+      {fieldChanges.length > 0 && (
+        <div className="mt-1 space-y-1">
+          {fieldChanges.map((c, i) => (
+            <div key={i} className="rounded-sm px-1.5 py-1 text-[10px]" style={{ background: "var(--accent-tint)", border: "1px solid var(--accent)" }}>
+              <div className="tabular font-semibold" style={{ color: "var(--ink)" }}>
+                {c.previous || "—"} → {c.current}
+              </div>
+              <div style={{ color: "var(--label)" }}>{c.reason}</div>
+              <div style={{ color: "var(--label)" }}>
+                {c.applied_at
+                  ? `Applied by ${c.applied_by}`
+                  : (
+                    <>
+                      Proposed by {c.proposed_by}{" "}
+                      <button
+                        onClick={() => handleApply(c)}
+                        disabled={saving}
+                        className="font-bold uppercase cursor-pointer disabled:opacity-40"
+                        style={{ color: "var(--accent)" }}
+                      >
+                        apply
+                      </button>
+                    </>
+                  )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {open && (
+        <div className="mt-1.5 space-y-1.5">
+          <input
+            value={newValue}
+            onChange={(e) => setNewValue(e.target.value)}
+            placeholder="Corrected value"
+            className="w-full text-xs px-1.5 py-1 rounded-sm"
+            style={{ border: "1px solid var(--rule)", background: "var(--paper)", color: "var(--ink)" }}
+          />
+          <textarea
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="Why? (required — e.g. checked source PDF, extraction is correct)"
+            rows={2}
+            className="w-full text-xs px-1.5 py-1 rounded-sm resize-none"
+            style={{ border: "1px solid var(--rule)", background: "var(--paper)", color: "var(--ink)" }}
+          />
+          {error && <div className="text-[10px]" style={{ color: "var(--cancel)" }}>{error}</div>}
+          <button
+            onClick={handlePropose}
+            disabled={saving || !reason.trim() || !newValue.trim()}
+            className="text-[10px] font-bold uppercase tracking-wide px-2 py-1 rounded-sm cursor-pointer disabled:opacity-40"
+            style={{ background: "var(--accent)", color: "white" }}
+          >
+            {saving ? "Saving…" : "Propose correction"}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function OrderCheckRow({
   job,
   checked,
   expanded,
   onToggle,
   onToggleExpand,
+  pendingChanges,
+  onCorrectionChanged,
 }: {
   job: ManifestJob;
   checked: boolean;
   expanded: boolean;
   onToggle: () => void;
   onToggleExpand: () => void;
+  pendingChanges: PendingChange[];
+  onCorrectionChanged: () => void;
 }) {
   return (
     <div style={{ borderBottom: "1px solid var(--rule)" }}>
@@ -149,12 +321,16 @@ function OrderCheckRow({
       </div>
       {expanded && (
         <div className="px-3 pb-3 grid grid-cols-2 gap-2" style={{ background: "var(--paper-raised)" }}>
-          <ExtractionField label="Collection" value={job.collection_point} sub={job.collection_postcode} />
-          <ExtractionField label="Delivery" value={job.delivery_point} sub={job.delivery_postcode} />
+          <CorrectableExtractionField label="Collection" fieldKey="collection_point" value={job.collection_point} sub={job.collection_postcode}
+            jobNumber={job.job_number} pendingChanges={pendingChanges} onProposed={onCorrectionChanged} />
+          <CorrectableExtractionField label="Delivery" fieldKey="delivery_point" value={job.delivery_point} sub={job.delivery_postcode}
+            jobNumber={job.job_number} pendingChanges={pendingChanges} onProposed={onCorrectionChanged} />
           <ExtractionField label="Collection date/time" value={`${job.collection_date} ${job.collection_time}`.trim()} />
           <ExtractionField label="Delivery date/time" value={`${job.delivery_date} ${job.delivery_time}`.trim()} />
-          <ExtractionField label="Price" value={job.price} />
-          <ExtractionField label="Order number" value={job.order_number} />
+          <CorrectableExtractionField label="Price" fieldKey="price" value={job.price}
+            jobNumber={job.job_number} pendingChanges={pendingChanges} onProposed={onCorrectionChanged} />
+          <CorrectableExtractionField label="Order number" fieldKey="order_number" value={job.order_number}
+            jobNumber={job.job_number} pendingChanges={pendingChanges} onProposed={onCorrectionChanged} />
           <ExtractionField label="Work type" value={job.work_type} />
           <ExtractionField label="Booking window" value={job.booking_window} />
           {job.traffic_note && (
@@ -262,6 +438,30 @@ function ManifestDetail({
   const [pdfHeight, setPdfHeight] = useState<number | null>(null);
   const dragState = useRef<{ startY: number; startHeight: number } | null>(null);
   const [otherJobs, setOtherJobs] = useState<OtherPdfJob[]>([]);
+  // pending_changes as returned by the server can go stale the moment a
+  // correction is proposed or applied — manifest is a prop, this component
+  // has no way to refetch it. Keyed by job_number, only ever set by
+  // handleCorrectionChanged below; falls back to the prop's own value.
+  const [pendingChangesOverride, setPendingChangesOverride] = useState<Record<string, PendingChange[]>>({});
+
+  function jobPendingChanges(job: ManifestJob): PendingChange[] {
+    return pendingChangesOverride[job.job_number] ?? job.pending_changes;
+  }
+
+  async function refetchPendingChanges(jobNumber: string) {
+    try {
+      const res = await fetch(`/api/manifests/${encodeURIComponent(manifest.message_id)}`);
+      const data = await res.json();
+      const fresh = (data?.manifest?.jobs as ManifestJob[] | undefined)?.find((j) => j.job_number === jobNumber);
+      if (fresh) {
+        setPendingChangesOverride((prev) => ({ ...prev, [jobNumber]: fresh.pending_changes }));
+      }
+    } catch {
+      // Best-effort — the correction itself already succeeded (that's what
+      // triggered this refetch); a stale display here isn't worth surfacing
+      // as an error to the reviewer.
+    }
+  }
 
   // Full booking-form job list. This email's own jobs always come first (sorted
   // among themselves), since those are what the reviewer is actually here to
@@ -324,6 +524,7 @@ function ManifestDetail({
     setProcessing(true);
     setError("");
     try {
+      const reviewedBy = ensureReviewerEmail();
       for (const job of pendingJobs) {
         const isChecked = checkedJobs.has(job.job_number);
         // "Review" is never a valid action to save — if a Review job somehow
@@ -335,7 +536,7 @@ function ManifestDetail({
         const res = await fetch("/api/manifests/action", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ job_number: job.job_number, action, source, reviewed_by: "" }),
+          body: JSON.stringify({ job_number: job.job_number, action, source, reviewed_by: reviewedBy }),
         });
         const data = await res.json();
         if (!res.ok || !data.ok) throw new Error(data.error ?? `Failed to save ${job.job_number}`);
@@ -415,6 +616,8 @@ function ManifestDetail({
                   expanded={expandedJob === row.job_number}
                   onToggle={() => toggle(row.job_number)}
                   onToggleExpand={() => setExpandedJob((prev) => (prev === row.job_number ? null : row.job_number))}
+                  pendingChanges={jobPendingChanges(row.job)}
+                  onCorrectionChanged={() => refetchPendingChanges(row.job_number)}
                 />
               ) : (
                 <OtherJobRow
