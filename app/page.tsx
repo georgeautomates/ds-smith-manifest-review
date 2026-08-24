@@ -297,19 +297,80 @@ function CorrectableExtractionField({
   );
 }
 
+const MANIFEST_ACTIONS: ManifestAction[] = ["Add", "Update", "Cancel", "Ignore"];
+
+// Per-action colour, keyed to this file's existing --add/--update/--cancel/
+// --ignore CSS variables (already used elsewhere for suggestion badges) so
+// the picker matches whichever theme (light/dark) the page is rendering in.
+// White text on all 4 — every one of these is a mid-to-dark colour in both
+// themes (see app/globals.css), so a single fixed ink colour is simpler than
+// inventing new per-action -ink tokens for one component.
+const ACTION_STYLE: Record<ManifestAction, { bg: string; border: string }> = {
+  Add:    { bg: "var(--add)",    border: "var(--add)" },
+  Update: { bg: "var(--update)", border: "var(--update)" },
+  Cancel: { bg: "var(--cancel)", border: "var(--cancel)" },
+  Ignore: { bg: "var(--ignore)", border: "var(--ignore)" },
+};
+
+/**
+ * Lets a reviewer force ANY of the 4 actions, not just accept-the-suggestion
+ * or fall back to Ignore. Before this, a job the classifier suggested Ignore
+ * had no way to be rescued as a real Add/Update, and a suggested Add/Update
+ * could not be redirected to Cancel — the only lever was checked (accept
+ * suggestion) vs unchecked (force Ignore). The backend API
+ * (app/api/manifests/action/route.ts) already accepted all 4 actions with a
+ * suggested/override source — this was a frontend-only gap.
+ */
+function ActionPicker({
+  job,
+  selected,
+  onSelect,
+}: {
+  job: ManifestJob;
+  selected: ManifestAction;
+  onSelect: (action: ManifestAction) => void;
+}) {
+  return (
+    <div className="flex gap-1 flex-wrap mt-1">
+      {MANIFEST_ACTIONS.map((action) => {
+        const isSelected = selected === action;
+        const isSuggested = job.suggested_action === action;
+        const style = ACTION_STYLE[action];
+        return (
+          <button
+            key={action}
+            type="button"
+            onClick={() => onSelect(action)}
+            title={isSuggested ? "System-suggested action" : undefined}
+            className="text-[10px] font-bold uppercase tracking-wide px-2 py-1 rounded-sm border transition-colors"
+            style={
+              isSelected
+                ? { background: style.bg, color: "#FFFFFF", borderColor: style.border }
+                : { background: "var(--paper)", color: "var(--label)", borderColor: "var(--rule)" }
+            }
+          >
+            {action}
+            {isSuggested && !isSelected && <span className="ml-1 opacity-70">•</span>}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function OrderCheckRow({
   job,
-  checked,
+  selectedAction,
   expanded,
-  onToggle,
+  onSelectAction,
   onToggleExpand,
   pendingChanges,
   onCorrectionChanged,
 }: {
   job: ManifestJob;
-  checked: boolean;
+  selectedAction: ManifestAction;
   expanded: boolean;
-  onToggle: () => void;
+  onSelectAction: (action: ManifestAction) => void;
   onToggleExpand: () => void;
   pendingChanges: PendingChange[];
   onCorrectionChanged: () => void;
@@ -317,7 +378,6 @@ function OrderCheckRow({
   return (
     <div style={{ borderBottom: "1px solid var(--rule)" }}>
       <div className="flex items-start gap-2.5 px-3 py-2.5">
-        <input type="checkbox" checked={checked} onChange={onToggle} className="mt-0.5 size-4 shrink-0 cursor-pointer" />
         <div className="min-w-0 flex-1">
           <span className="tabular text-sm font-semibold" style={{ color: "var(--ink)" }}>{job.job_number}</span>
           <div className="text-[11px] truncate" style={{ color: "var(--label)" }}>
@@ -336,6 +396,7 @@ function OrderCheckRow({
               Suggested: {job.suggested_action}
             </div>
           ) : null}
+          <ActionPicker job={job} selected={selectedAction} onSelect={onSelectAction} />
           {/* The reason, not just the verdict. On an Update this carries the actual
               field-level diff ("delivery_date: 17/08/2026 -> 18/08/2026"), which is the
               only place the OLD value exists — the row itself already shows the new one.
@@ -477,11 +538,19 @@ function ManifestDetail({
   onProcessed: (messageId: string, jobNumbers: string[]) => void;
 }) {
   const pendingJobs = useMemo(() => manifest.jobs.filter((j) => !j.review_action), [manifest]);
-  // "Review" jobs (chain-reply emails, no confident suggestion) never
-  // default-checked — there's no safe action to auto-accept, so they start
-  // as Ignore (unchecked) until a reviewer looks closer and decides.
-  const [checkedJobs, setCheckedJobs] = useState<Set<string>>(
-    () => new Set(pendingJobs.filter((j) => j.suggested_action && j.suggested_action !== "Review").map((j) => j.job_number))
+  // Per-job selected action, defaulting to the system's own suggestion.
+  // "Review" jobs (chain-reply emails, no confident suggestion) default to
+  // Ignore instead — there's no safe action to auto-accept for those, a
+  // reviewer has to look closer and pick deliberately. A reviewer can
+  // override any job to any of the 4 actions via ActionPicker, regardless
+  // of what was suggested — the previous checkbox-only model could only
+  // accept-the-suggestion or force Ignore, with no way to rescue a job the
+  // classifier wrongly suggested Ignore, or redirect one to Cancel.
+  function defaultAction(job: ManifestJob): ManifestAction {
+    return job.suggested_action && job.suggested_action !== "Review" ? job.suggested_action : "Ignore";
+  }
+  const [selectedActions, setSelectedActions] = useState<Record<string, ManifestAction>>(
+    () => Object.fromEntries(pendingJobs.map((j) => [j.job_number, defaultAction(j)]))
   );
   const [expandedJob, setExpandedJob] = useState<string | null>(null);
   const [processing, setProcessing] = useState(false);
@@ -533,7 +602,7 @@ function ManifestDetail({
   }, [manifest.jobs, otherJobs]);
 
   useEffect(() => {
-    setCheckedJobs(new Set(pendingJobs.map((j) => j.job_number)));
+    setSelectedActions(Object.fromEntries(pendingJobs.map((j) => [j.job_number, defaultAction(j)])));
   }, [manifest.message_id, pendingJobs]);
 
   useEffect(() => {
@@ -548,13 +617,8 @@ function ManifestDetail({
 
   const pdfUrl = manifest.jobs.find((j) => j.pdf_url)?.pdf_url ?? "";
 
-  function toggle(jobNumber: string) {
-    setCheckedJobs((prev) => {
-      const next = new Set(prev);
-      if (next.has(jobNumber)) next.delete(jobNumber);
-      else next.add(jobNumber);
-      return next;
-    });
+  function selectAction(jobNumber: string, action: ManifestAction) {
+    setSelectedActions((prev) => ({ ...prev, [jobNumber]: action }));
   }
 
   function onDragStart(e: React.PointerEvent) {
@@ -580,13 +644,8 @@ function ManifestDetail({
     try {
       const reviewedBy = ensureReviewerEmail();
       for (const job of pendingJobs) {
-        const isChecked = checkedJobs.has(job.job_number);
-        // "Review" is never a valid action to save — if a Review job somehow
-        // ends up checked, still fall back to Add rather than send an invalid
-        // action to the API.
-        const suggestion: ManifestAction = job.suggested_action && job.suggested_action !== "Review" ? job.suggested_action : "Add";
-        const action: ManifestAction = isChecked ? suggestion : "Ignore";
-        const source: "suggested" | "override" = isChecked && job.suggested_action === action ? "suggested" : "override";
+        const action: ManifestAction = selectedActions[job.job_number] ?? defaultAction(job);
+        const source: "suggested" | "override" = job.suggested_action === action ? "suggested" : "override";
         const res = await fetch("/api/manifests/action", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -666,9 +725,9 @@ function ManifestDetail({
                 <OrderCheckRow
                   key={row.job_number}
                   job={row.job}
-                  checked={checkedJobs.has(row.job_number)}
+                  selectedAction={selectedActions[row.job_number] ?? defaultAction(row.job)}
                   expanded={expandedJob === row.job_number}
-                  onToggle={() => toggle(row.job_number)}
+                  onSelectAction={(action) => selectAction(row.job_number, action)}
                   onToggleExpand={() => setExpandedJob((prev) => (prev === row.job_number ? null : row.job_number))}
                   pendingChanges={jobPendingChanges(row.job)}
                   onCorrectionChanged={() => refetchPendingChanges(row.job_number)}
@@ -685,12 +744,15 @@ function ManifestDetail({
           </div>
           <div className="shrink-0 px-3 py-3" style={{ borderTop: "1px solid var(--rule)", background: "var(--paper-raised)" }}>
             {error && <div className="text-xs mb-2" style={{ color: "var(--cancel)" }}>{error}</div>}
-            {/* Deliberately NOT called "Process". Nothing downstream reads review_action
-                yet: the RPA is not gated on it, and the Client Portal has no update path
-                at all, so an Update is always applied by hand in Proteo. A button
-                promising to process would have someone skip that manual step and send a
-                truck to the wrong place. It promises less than it delivers on purpose,
-                and gets renamed the day it actually triggers something. */}
+            {/* Named "Mark as handled" (commit 03ffcfa, 2026-08-19) on the reasoning that
+                nothing downstream read review_action yet, so a "Process" button would
+                overstate what clicking it does. That stopped being true the very next day
+                (commit 18ac127, 2026-08-20, firmin/agent.py's run_pending_client_portal_rpa):
+                any job saved here with action Add or Update is picked up by the live poll
+                loop within ~60s and run through the real Client Portal RPA (fills the form,
+                screenshots, does not submit). Cancel/Ignore still trigger nothing — those
+                remain a human's job in Proteo. The helper text below reflects this now;
+                don't let it drift out of sync with agent.py again. */}
             <button
               onClick={handleProcess}
               disabled={processing || pendingJobs.length === 0}
@@ -700,7 +762,9 @@ function ManifestDetail({
               {processing ? "Saving…" : pendingJobs.length === 0 ? "All decisions recorded" : "Mark as handled"}
             </button>
             <div className="text-[10px] mt-1.5 leading-snug text-center" style={{ color: "var(--label)" }}>
-              Records your decision. Add and update the order in Proteo yourself.
+              Records your decision. Add/Update jobs trigger the Client Portal RPA
+              automatically (fills the form, screenshot only — never submits). Cancel/Ignore
+              still need applying by hand in Proteo.
             </div>
           </div>
         </div>
