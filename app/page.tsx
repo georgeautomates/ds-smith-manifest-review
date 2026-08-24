@@ -637,8 +637,34 @@ function ManifestDetail({
     dragState.current = null;
   }
 
+  // A job with an unapplied human_correction is about to be Added/Updated
+  // with stale data - the RPA fills from the stored row, not from an open
+  // proposal. Previously this shipped anyway and relied on a later
+  // correction-triggered re-run to fix it after the fact, which only
+  // actually happens once the poll loop gets back around to it (it can
+  // trail a busy RPA backlog by 20+ minutes - confirmed live 2026-08-24).
+  // Blocking here means the RPA only ever runs once, with the right data
+  // from the start, instead of once wrong then once corrected.
+  function unresolvedCorrections(job: ManifestJob): PendingChange[] {
+    return jobPendingChanges(job).filter((c) => c.source === "human_correction" && !c.applied_at);
+  }
+
   async function handleProcess() {
     if (pendingJobs.length === 0) return;
+    const blocked = pendingJobs.filter((job) => {
+      const action = selectedActions[job.job_number] ?? defaultAction(job);
+      return (action === "Add" || action === "Update") && unresolvedCorrections(job).length > 0;
+    });
+    if (blocked.length > 0) {
+      // No discard/reject action exists yet for a proposed correction - only
+      // apply. So the only way past this today is Apply, or switch the job's
+      // action to Cancel/Ignore. Don't imply a "discard" option that isn't
+      // there.
+      setError(
+        `Apply the proposed correction(s) on job ${blocked.map((j) => j.job_number).join(", ")} before processing as Add/Update - otherwise the RPA would fill in the old, uncorrected values.`
+      );
+      return;
+    }
     setProcessing(true);
     setError("");
     try {
