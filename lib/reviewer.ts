@@ -1,14 +1,28 @@
-// Stopgap identity capture, ahead of real user/admin auth (planned next).
+// Stopgap identity capture — TRANSITIONAL ONLY as of 2026-08-26.
 //
-// Every write that records "who did this" (review_action_by, and the new
-// pending_changes proposed_by/applied_by) was previously always sent as "" —
-// there was no session identity anywhere in either app. Rather than block on
-// auth landing, this asks once per browser and remembers the answer, so the
-// audit trail starts filling in now instead of staying permanently blank.
+// Real auth is landing via Azure Container Apps Easy Auth (Ayon is waiting
+// on Karl to create the Entra app registration — see the
+// project_2026-08-21_next_session_auth memory). Once "Require
+// authentication" is enabled on the container app, every request is
+// already Microsoft-authenticated before it reaches this code, and the API
+// routes (app/api/manifests/.../route.ts) read the real, unforgeable
+// identity from the X-MS-CLIENT-PRINCIPAL-NAME header via
+// lib/identity.ts's getVerifiedReviewerEmail() — this file's value is only
+// used there as a fallback for as long as that header isn't present yet.
 //
-// Deliberately stores an email, not a display name — a future auth migration
-// can backfill a user_id by matching on email, which a free-text name can't
-// support reliably.
+// Every write that records "who did this" (review_action_by, and the
+// pending_changes proposed_by/applied_by) was previously always sent as ""
+// — there was no session identity anywhere in either app. Rather than block
+// on auth landing, this asks once per browser and remembers the answer, so
+// the audit trail starts filling in now instead of staying permanently
+// blank. It is spoofable (anyone can type any email) — that is exactly the
+// gap Easy Auth closes; this file is not the security boundary once that
+// lands, only the source of a display value for the client-side UI and the
+// last-resort fallback server side.
+//
+// Deliberately stores an email, not a display name — matches the header
+// Easy Auth injects, so once it lands, real logins and this stopgap's old
+// entries line up on the same identifier.
 
 const STORAGE_KEY = "firmin_reviewer_email";
 

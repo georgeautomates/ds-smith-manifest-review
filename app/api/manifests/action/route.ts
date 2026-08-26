@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { saveManifestAction, type ManifestAction } from "@/lib/db";
+import { getVerifiedReviewerEmail } from "@/lib/identity";
 
 const VALID_ACTIONS: ManifestAction[] = ["Add", "Update", "Cancel", "Ignore"];
 
@@ -18,11 +19,17 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: 'source must be "suggested" or "override"' }, { status: 400 });
     }
 
+    // Server-verified identity when Easy Auth is live; falls back to the
+    // client-supplied value only during the transition — see lib/identity.ts.
+    // Matches this route's original leniency: reviewed_by may end up blank,
+    // unlike correction/apply below, which require a real identity.
+    const reviewedBy = getVerifiedReviewerEmail(req, typeof reviewed_by === "string" ? reviewed_by : "");
+
     await saveManifestAction({
       job_number,
       action,
       source,
-      reviewed_by: typeof reviewed_by === "string" ? reviewed_by : "",
+      reviewed_by: reviewedBy,
     });
     return NextResponse.json({ ok: true });
   } catch (e) {

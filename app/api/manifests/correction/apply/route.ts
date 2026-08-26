@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { applyCorrection, CORRECTABLE_FIELDS, type CorrectableField } from "@/lib/db";
+import { getVerifiedReviewerEmail } from "@/lib/identity";
 
 export async function POST(req: NextRequest) {
   try {
@@ -15,7 +16,11 @@ export async function POST(req: NextRequest) {
     if (!proposed_at || typeof proposed_at !== "string") {
       return NextResponse.json({ ok: false, error: "proposed_at is required to identify which correction to apply" }, { status: 400 });
     }
-    if (!applied_by || typeof applied_by !== "string") {
+
+    // Server-verified identity when Easy Auth is live; falls back to the
+    // client-supplied value only during the transition — see lib/identity.ts.
+    const appliedBy = getVerifiedReviewerEmail(req, typeof applied_by === "string" ? applied_by : "");
+    if (!appliedBy) {
       return NextResponse.json({ ok: false, error: "applied_by is required" }, { status: 400 });
     }
 
@@ -23,7 +28,7 @@ export async function POST(req: NextRequest) {
       job_number,
       field: field as CorrectableField,
       proposed_at,
-      applied_by,
+      applied_by: appliedBy,
     });
     return NextResponse.json({ ok: true });
   } catch (e) {
