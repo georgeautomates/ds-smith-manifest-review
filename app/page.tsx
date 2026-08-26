@@ -65,6 +65,13 @@ function ManifestRow({ manifest, active, onClick }: { manifest: Manifest; active
   const jobNumbers = manifest.jobs.map((j) => j.job_number);
   const shown = jobNumbers.slice(0, 4).join(", ");
   const extra = jobNumbers.length > 4 ? ` +${jobNumbers.length - 4} more` : "";
+  // "N orders" told a reviewer how big the manifest was, but not how much of
+  // it they'd actually gotten through — a manifest with 9 of 10 decided
+  // looked identical in the list to one nobody had opened yet. Reuses the
+  // manifest's own job rows (already fetched, no new query) to count how
+  // many already have a review_action set.
+  const decidedCount = manifest.jobs.filter((j) => j.review_action).length;
+  const allDecided = jobCount > 0 && decidedCount >= jobCount;
   return (
     <button
       onClick={onClick}
@@ -84,8 +91,11 @@ function ManifestRow({ manifest, active, onClick }: { manifest: Manifest; active
       </div>
       <div className="flex items-center justify-between gap-2">
         <span className="text-[11px] tabular" style={{ color: "var(--label)" }}>{fmtDateTime(manifest.email_received_at)}</span>
-        <span className="text-[11px] tabular" style={{ color: "var(--label)" }}>
-          {jobCount} order{jobCount === 1 ? "" : "s"}
+        <span
+          className="text-[11px] tabular font-semibold"
+          style={{ color: allDecided ? "var(--accent)" : "var(--label)" }}
+        >
+          {decidedCount}/{jobCount} reviewed
         </span>
       </div>
     </button>
@@ -315,11 +325,11 @@ const MANIFEST_ACTIONS: ManifestAction[] = ["Add", "Update", "Cancel", "Ignore"]
 // White text on all 4 — every one of these is a mid-to-dark colour in both
 // themes (see app/globals.css), so a single fixed ink colour is simpler than
 // inventing new per-action -ink tokens for one component.
-const ACTION_STYLE: Record<ManifestAction, { bg: string; border: string }> = {
-  Add:    { bg: "var(--add)",    border: "var(--add)" },
-  Update: { bg: "var(--update)", border: "var(--update)" },
-  Cancel: { bg: "var(--cancel)", border: "var(--cancel)" },
-  Ignore: { bg: "var(--ignore)", border: "var(--ignore)" },
+const ACTION_STYLE: Record<ManifestAction, { bg: string; tint: string; border: string }> = {
+  Add:    { bg: "var(--add)",    tint: "var(--add-tint)",    border: "var(--add)" },
+  Update: { bg: "var(--update)", tint: "var(--update-tint)", border: "var(--update)" },
+  Cancel: { bg: "var(--cancel)", tint: "var(--cancel-tint)", border: "var(--cancel)" },
+  Ignore: { bg: "var(--ignore)", tint: "var(--ignore-tint)", border: "var(--ignore)" },
 };
 
 /**
@@ -352,10 +362,16 @@ function ActionPicker({
             type="button"
             onClick={() => onSelect(action)}
             title={isSuggested ? "System-suggested action" : undefined}
-            className="text-[10px] font-bold uppercase tracking-wide px-2 py-1 rounded-sm border transition-colors"
+            className="text-[10px] font-bold uppercase tracking-wide px-2 py-1 rounded-sm border-2 transition-colors"
             style={
+              // Tinted + bold border for "your current pick," not the solid fill —
+              // solid fill is reserved for a job whose decision is actually saved
+              // (see the "✓ {action}" badge above, once review_action is set), so
+              // the two states can never look the same. Was identical to the saved
+              // badge before this change — confirmed real 2026-08-26, caused a
+              // genuine mistake mid-session.
               isSelected
-                ? { background: style.bg, color: "#FFFFFF", borderColor: style.border }
+                ? { background: style.tint, color: style.bg, borderColor: style.border }
                 : { background: "var(--paper)", color: "var(--label)", borderColor: "var(--rule)" }
             }
           >
@@ -406,7 +422,24 @@ function OrderCheckRow({
               Suggested: {job.suggested_action}
             </div>
           ) : null}
-          <ActionPicker job={job} selected={selectedAction} onSelect={onSelectAction} />
+          {/* A decided job showed the SAME interactive 4-button picker as a still-pending
+              one, with its already-saved action rendered solid-filled — visually identical
+              to a fresh, unsaved selection. Confirmed real 2026-08-26: caused a genuine
+              mistake mid-session (a click on the picker was mistaken for a completed save).
+              Now: decided jobs get a plain, non-interactive status badge instead of the
+              picker at all — re-picking a saved decision does nothing anyway (the picker
+              only ever submits via pendingJobs), so showing it implied an action that
+              wasn't really available. */}
+          {job.review_action ? (
+            <div
+              className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide mt-1 px-1.5 py-0.5 rounded-sm"
+              style={{ background: ACTION_STYLE[job.review_action].bg, color: "#FFFFFF" }}
+            >
+              ✓ {job.review_action}
+            </div>
+          ) : (
+            <ActionPicker job={job} selected={selectedAction} onSelect={onSelectAction} />
+          )}
           {/* The reason, not just the verdict. On an Update this carries the actual
               field-level diff ("delivery_date: 17/08/2026 -> 18/08/2026"), which is the
               only place the OLD value exists — the row itself already shows the new one.
@@ -415,11 +448,6 @@ function OrderCheckRow({
           {job.suggested_reason && (
             <div className="text-[10px] mt-0.5 leading-snug" style={{ color: "var(--ink-soft)" }}>
               {job.suggested_reason}
-            </div>
-          )}
-          {job.review_action && (
-            <div className="text-[10px] font-bold uppercase tracking-wide mt-0.5" style={{ color: "var(--ignore)" }}>
-              Already {job.review_action}
             </div>
           )}
         </div>
@@ -795,7 +823,11 @@ function ManifestDetail({
               className="w-full py-2.5 rounded-sm font-bold text-sm transition-colors disabled:opacity-40"
               style={{ background: "var(--accent)", color: "var(--accent-ink)" }}
             >
-              {processing ? "Saving…" : pendingJobs.length === 0 ? "All decisions recorded" : "Mark as handled"}
+              {processing
+                ? "Saving…"
+                : pendingJobs.length === 0
+                  ? "All decisions recorded"
+                  : `Save ${pendingJobs.length} decision${pendingJobs.length === 1 ? "" : "s"}`}
             </button>
             <div className="text-[10px] mt-1.5 leading-snug text-center" style={{ color: "var(--label)" }}>
               Records your decision. Add/Update jobs trigger the Client Portal RPA
