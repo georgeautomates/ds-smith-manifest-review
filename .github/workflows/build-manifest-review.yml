@@ -9,9 +9,18 @@ permissions:
   id-token: write
   contents: read
 
+# A second push must not overtake the first mid-deploy. Queue rather than
+# cancel: cancelling between build and deploy could leave the app pointed at
+# an image nobody chose.
+concurrency:
+  group: deploy-manifest-review
+  cancel-in-progress: false
+
 env:
   REGISTRY: acrtmsdevukw01
   IMAGE: manifest-review
+  APP: ca-manifest-review
+  RG: rg-tms-dev-ukw-app-01
 
 jobs:
   build:
@@ -43,3 +52,23 @@ jobs:
             ${{ env.REGISTRY }}.azurecr.io/${{ env.IMAGE }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # Container Apps does not re-pull when a tag moves, so building alone
+      # leaves the new image in ACR while the old revision keeps serving.
+      # Deploy the immutable SHA tag rather than :latest, so every revision
+      # names the exact commit it runs and rollback is one command.
+      - name: Deploy to Container App
+        run: |
+          SHORT_SHA="$(echo "${{ github.sha }}" | cut -c1-7)"
+          az containerapp update \
+            --name "$APP" \
+            --resource-group "$RG" \
+            --image "${{ env.REGISTRY }}.azurecr.io/${{ env.IMAGE }}:${{ github.sha }}" \
+            --revision-suffix "s${SHORT_SHA}-${{ github.run_number }}" \
+            --output none
+
+      - name: Report what is now live
+        run: |
+          az containerapp show --name "$APP" --resource-group "$RG" \
+            --query "{image:properties.template.containers[0].image, revision:properties.latestReadyRevisionName, fqdn:properties.configuration.ingress.fqdn}" \
+            --output yaml
