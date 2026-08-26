@@ -58,6 +58,13 @@ function pdfJobCount(m: Manifest): number {
 
 function ManifestRow({ manifest, active, onClick }: { manifest: Manifest; active: boolean; onClick: () => void }) {
   const jobCount = pdfJobCount(manifest);
+  // Job numbers weren't shown anywhere in the list — the only way to find a
+  // specific job was already knowing which email it arrived on. Truncated
+  // rather than every job on a large manifest, since this is a scan aid,
+  // not the full detail (that's in the panel once a row is selected).
+  const jobNumbers = manifest.jobs.map((j) => j.job_number);
+  const shown = jobNumbers.slice(0, 4).join(", ");
+  const extra = jobNumbers.length > 4 ? ` +${jobNumbers.length - 4} more` : "";
   return (
     <button
       onClick={onClick}
@@ -71,6 +78,9 @@ function ManifestRow({ manifest, active, onClick }: { manifest: Manifest; active
         <span className="text-sm font-semibold truncate" style={{ color: "var(--ink)" }}>
           {manifest.subject || "No subject"}
         </span>
+      </div>
+      <div className="text-[10px] tabular truncate" style={{ color: "var(--label)" }}>
+        {shown}{extra}
       </div>
       <div className="flex items-center justify-between gap-2">
         <span className="text-[11px] tabular" style={{ color: "var(--label)" }}>{fmtDateTime(manifest.email_received_at)}</span>
@@ -932,6 +942,7 @@ export default function Page() {
   const [error, setError] = useState("");
   const [filter, setFilter] = useState<"new" | "processed">("new");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
   const [showRecipients, setShowRecipients] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -958,7 +969,21 @@ export default function Page() {
 
   const newManifests = useMemo(() => manifests.filter(isPending), [manifests]);
   const processedManifests = useMemo(() => manifests.filter((m) => !isPending(m)), [manifests]);
-  const visible = filter === "new" ? newManifests : processedManifests;
+  const filtered = filter === "new" ? newManifests : processedManifests;
+
+  // The list row only ever showed the email subject line, not job numbers —
+  // there was no way to find a specific job without already knowing which
+  // email it arrived on (confirmed real 2026-08-26: couldn't locate a known
+  // job number by scrolling the Pending tab by eye). Matches job number,
+  // order number, or subject, across whichever tab is active.
+  const visible = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return filtered;
+    return filtered.filter((m) =>
+      (m.subject || "").toLowerCase().includes(q) ||
+      m.jobs.some((j) => j.job_number.toLowerCase().includes(q) || j.order_number.toLowerCase().includes(q)),
+    );
+  }, [filtered, search]);
 
   useEffect(() => {
     if (visible.length === 0) { setSelectedId(null); return; }
@@ -1085,10 +1110,22 @@ export default function Page() {
                 </button>
               ))}
             </div>
+            <div className="shrink-0 px-3 py-2" style={{ borderBottom: "1px solid var(--rule)" }}>
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Find by job number, order number, or subject…"
+                className="w-full text-xs px-2.5 py-1.5 rounded-sm"
+                style={{ border: "1px solid var(--rule)", background: "var(--paper)", color: "var(--ink)" }}
+              />
+            </div>
             <div className="flex-1 overflow-y-auto">
               {visible.length === 0 ? (
                 <div className="px-4 py-8 text-center text-sm" style={{ color: "var(--label)" }}>
-                  {filter === "new" ? "Nothing waiting for review." : "Nothing recorded yet."}
+                  {search.trim()
+                    ? "No match in this tab."
+                    : filter === "new" ? "Nothing waiting for review." : "Nothing recorded yet."}
                 </div>
               ) : (
                 visible.map((m) => (
