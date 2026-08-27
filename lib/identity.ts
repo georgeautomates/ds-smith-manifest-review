@@ -33,3 +33,22 @@ export function getVerifiedReviewerEmail(req: NextRequest, unverifiedFallback?: 
   if (verified) return verified;
   return unverifiedFallback ?? "";
 }
+
+// Admin/system-log access — Paul, Omi, Ayon, George only (2026-08-27). Real
+// trustfirmin.com accounts, checked against the same verified Easy Auth
+// header as everything else here — no fallback, since this is the one place
+// in the app that gates on identity rather than just recording it. Anyone
+// else signed in (a reviewer using the normal dashboard) gets no admin
+// link and a 403 if they hit the route directly.
+const ADMIN_EMAILS = new Set([
+  "tomio-dev-admin@trustfirmin.com",
+  "tayon-dev-admin@trustfirmin.com",
+  "gspain-warner@trustfirmin.com",
+  "pdenyer@trustfirmin.com",
+]);
+
+export function isAdmin(req: NextRequest): boolean {
+  const verified = req.headers.get("x-ms-client-principal-name");
+  if (!verified) return false;
+  return ADMIN_EMAILS.has(verified.trim().toLowerCase());
+}
