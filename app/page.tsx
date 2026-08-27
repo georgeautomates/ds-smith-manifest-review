@@ -978,6 +978,13 @@ export default function Page() {
   const [showRecipients, setShowRecipients] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Cheap probe, not a real capability check — the admin route is the actual
+  // gate (403s for anyone not on the allowlist). This only decides whether
+  // to show the link at all, so a non-admin never even sees it exists.
+  const [isAdminUser, setIsAdminUser] = useState(false);
+  useEffect(() => {
+    fetch("/api/admin/summary").then((res) => setIsAdminUser(res.status !== 403)).catch(() => {});
+  }, []);
 
   function showToast(message: string) {
     if (toastTimer.current) clearTimeout(toastTimer.current);
@@ -1103,6 +1110,15 @@ export default function Page() {
           <span className="font-bold" style={{ color: "var(--ink)" }}>Manifest Review</span>
         </div>
         <div className="ml-auto flex items-center gap-3 relative">
+          {isAdminUser && (
+            <a
+              href="/admin"
+              className="text-xs font-bold uppercase tracking-wide px-3 py-1.5 rounded-sm"
+              style={{ border: "1px solid var(--rule)", color: "var(--ink-soft)" }}
+            >
+              Admin
+            </a>
+          )}
           <button
             onClick={() => setShowRecipients((v) => !v)}
             className="text-xs font-bold uppercase tracking-wide px-3 py-1.5 rounded-sm"

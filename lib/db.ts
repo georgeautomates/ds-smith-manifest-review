@@ -448,3 +448,112 @@ export async function removeRecipient(id: number): Promise<void> {
   const pool = getPool();
   await pool.query(`DELETE FROM manifest_review_recipients WHERE id = $1`, [id]);
 }
+
+// ── Admin / system log (read-only, gated by lib/identity.ts's isAdmin) ─────────
+
+export type RpaRunSummary = {
+  run_at: string;
+  job_number: string;
+  client_name: string;
+  status: string;
+  success: boolean | null;
+  failed_step: string;
+  duration_ms: number | null;
+  error: string;
+};
+
+export async function getRecentRpaRuns(limit = 50): Promise<RpaRunSummary[]> {
+  const pool = getPool();
+  const { rows } = await pool.query(
+    `SELECT run_at, job_number, client_name, status, success, failed_step, duration_ms, error
+     FROM rpa_runs ORDER BY run_at DESC LIMIT $1`,
+    [limit]
+  );
+  return rows.map((r) => ({
+    run_at: r.run_at ? String(r.run_at) : "",
+    job_number: String(r.job_number ?? ""),
+    client_name: String(r.client_name ?? ""),
+    status: String(r.status ?? ""),
+    success: r.success === null ? null : Boolean(r.success),
+    failed_step: String(r.failed_step ?? ""),
+    duration_ms: r.duration_ms === null ? null : Number(r.duration_ms),
+    error: String(r.error ?? ""),
+  }));
+}
+
+export type PipelineRunSummary = {
+  run_at: string;
+  email_subject: string;
+  client_name: string;
+  status: string;
+  job_count: number;
+  jobs_written: number;
+  jobs_skipped: number;
+  jobs_failed: number;
+  error: string;
+};
+
+export async function getRecentPipelineRuns(limit = 50): Promise<PipelineRunSummary[]> {
+  const pool = getPool();
+  const { rows } = await pool.query(
+    `SELECT run_at, email_subject, client_name, status, job_count, jobs_written, jobs_skipped, jobs_failed, error
+     FROM pipeline_runs ORDER BY run_at DESC LIMIT $1`,
+    [limit]
+  );
+  return rows.map((r) => ({
+    run_at: r.run_at ? String(r.run_at) : "",
+    email_subject: String(r.email_subject ?? ""),
+    client_name: String(r.client_name ?? ""),
+    status: String(r.status ?? ""),
+    job_count: Number(r.job_count ?? 0),
+    jobs_written: Number(r.jobs_written ?? 0),
+    jobs_skipped: Number(r.jobs_skipped ?? 0),
+    jobs_failed: Number(r.jobs_failed ?? 0),
+    error: String(r.error ?? ""),
+  }));
+}
+
+export type ReviewAuditEntry = {
+  job_number: string;
+  review_action: string;
+  review_action_by: string;
+  review_action_at: string;
+};
+
+export async function getRecentReviewActions(limit = 50): Promise<ReviewAuditEntry[]> {
+  const pool = getPool();
+  const { rows } = await pool.query(
+    `SELECT job_number, review_action, review_action_by, review_action_at
+     FROM st_regis_orders
+     WHERE review_action_at IS NOT NULL
+     ORDER BY review_action_at DESC LIMIT $1`,
+    [limit]
+  );
+  return rows.map((r) => ({
+    job_number: String(r.job_number ?? ""),
+    review_action: String(r.review_action ?? ""),
+    review_action_by: String(r.review_action_by ?? ""),
+    review_action_at: r.review_action_at ? String(r.review_action_at) : "",
+  }));
+}
+
+export type AgentHeartbeat = {
+  key: string;
+  value: string;
+  updated_at: string;
+};
+
+/** agent_state is the live VPS agent's own state table — a row only updates
+ * while its polling loop is actually running, so recency here is a cheap
+ * proxy for "is the agent alive" without needing a dedicated healthcheck. */
+export async function getAgentHeartbeats(): Promise<AgentHeartbeat[]> {
+  const pool = getPool();
+  const { rows } = await pool.query(
+    `SELECT key, value, updated_at FROM agent_state ORDER BY updated_at DESC`
+  );
+  return rows.map((r) => ({
+    key: String(r.key ?? ""),
+    value: String(r.value ?? ""),
+    updated_at: r.updated_at ? String(r.updated_at) : "",
+  }));
+}
