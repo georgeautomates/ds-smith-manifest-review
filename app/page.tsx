@@ -332,6 +332,18 @@ const ACTION_STYLE: Record<ManifestAction, { bg: string; tint: string; border: s
   Ignore: { bg: "var(--ignore)", tint: "var(--ignore-tint)", border: "var(--ignore)" },
 };
 
+// What each action actually means, in the reviewer's own terms, not the
+// system's. Shown as each button's tooltip so the meaning is one hover away
+// without permanently costing row height — confirmed real 2026-08-28: a
+// first-time user sees 4 bare buttons (Add/Update/Cancel/Ignore) with no way
+// to tell what any of them mean without already knowing the mental model.
+const ACTION_HINT: Record<ManifestAction, string> = {
+  Add: "This is a genuine new order — fills the Client Portal automatically, you still confirm it there",
+  Update: "An existing order changed (date, time, price, etc.) — fills the updated values, you still confirm in the Portal",
+  Cancel: "DS Smith cancelled this order — you cancel it in Proteo by hand, nothing automatic happens here",
+  Ignore: "Not a real order (a reply, a duplicate, an FYI) — marks it handled, nothing else happens",
+};
+
 /**
  * Lets a reviewer force ANY of the 4 actions, not just accept-the-suggestion
  * or fall back to Ignore. Before this, a job the classifier suggested Ignore
@@ -351,35 +363,41 @@ function ActionPicker({
   onSelect: (action: ManifestAction) => void;
 }) {
   return (
-    <div className="flex gap-1 flex-wrap mt-1">
-      {MANIFEST_ACTIONS.map((action) => {
-        const isSelected = selected === action;
-        const isSuggested = job.suggested_action === action;
-        const style = ACTION_STYLE[action];
-        return (
-          <button
-            key={action}
-            type="button"
-            onClick={() => onSelect(action)}
-            title={isSuggested ? "System-suggested action" : undefined}
-            className="text-[10px] font-bold uppercase tracking-wide px-2 py-1 rounded-sm border-2 transition-colors"
-            style={
-              // Tinted + bold border for "your current pick," not the solid fill —
-              // solid fill is reserved for a job whose decision is actually saved
-              // (see the "✓ {action}" badge above, once review_action is set), so
-              // the two states can never look the same. Was identical to the saved
-              // badge before this change — confirmed real 2026-08-26, caused a
-              // genuine mistake mid-session.
-              isSelected
-                ? { background: style.tint, color: style.bg, borderColor: style.border }
-                : { background: "var(--paper)", color: "var(--label)", borderColor: "var(--rule)" }
-            }
-          >
-            {action}
-            {isSuggested && !isSelected && <span className="ml-1 opacity-70">•</span>}
-          </button>
-        );
-      })}
+    <div className="mt-1">
+      <div className="text-[9px] font-bold uppercase tracking-widest mb-1" style={{ color: "var(--label)" }}>
+        What is this order?
+      </div>
+      <div className="flex gap-1 flex-wrap">
+        {MANIFEST_ACTIONS.map((action) => {
+          const isSelected = selected === action;
+          const isSuggested = job.suggested_action === action;
+          const style = ACTION_STYLE[action];
+          const hint = ACTION_HINT[action] + (isSuggested ? " (system-suggested)" : "");
+          return (
+            <button
+              key={action}
+              type="button"
+              onClick={() => onSelect(action)}
+              title={hint}
+              className="text-[10px] font-bold uppercase tracking-wide px-2 py-1 rounded-sm border-2 transition-colors"
+              style={
+                // Tinted + bold border for "your current pick," not the solid fill —
+                // solid fill is reserved for a job whose decision is actually saved
+                // (see the "✓ {action}" badge above, once review_action is set), so
+                // the two states can never look the same. Was identical to the saved
+                // badge before this change — confirmed real 2026-08-26, caused a
+                // genuine mistake mid-session.
+                isSelected
+                  ? { background: style.tint, color: style.bg, borderColor: style.border }
+                  : { background: "var(--paper)", color: "var(--label)", borderColor: "var(--rule)" }
+              }
+            >
+              {action}
+              {isSuggested && !isSelected && <span className="ml-1 opacity-70">•</span>}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
