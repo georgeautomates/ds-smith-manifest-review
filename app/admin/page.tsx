@@ -77,6 +77,7 @@ export default function AdminPage() {
   const [summary, setSummary] = useState<Summary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [forbidden, setForbidden] = useState(false);
+  const [jobFilter, setJobFilter] = useState("");
 
   useEffect(() => {
     fetch("/api/admin/summary")
@@ -118,6 +119,14 @@ export default function AdminPage() {
     );
   }
 
+  const q = jobFilter.trim().toLowerCase();
+  const matches = (...fields: (string | null | undefined)[]) =>
+    q === "" || fields.some((f) => (f ?? "").toLowerCase().includes(q));
+
+  const filteredPipelineRuns = summary.pipelineRuns.filter((p) => matches(p.email_subject, p.client_name));
+  const filteredRpaRuns = summary.rpaRuns.filter((r) => matches(r.job_number, r.client_name));
+  const filteredReviewActions = summary.reviewActions.filter((r) => matches(r.job_number, r.review_action_by));
+
   return (
     <div className="flex-1 flex flex-col gap-6 p-6 max-w-5xl mx-auto w-full">
       <header className="flex flex-col gap-1">
@@ -126,6 +135,23 @@ export default function AdminPage() {
           Read-only. RPA runs, ingest pipeline health, reviewer audit trail, agent heartbeat.
         </p>
       </header>
+
+      <div className="flex flex-col gap-1">
+        <input
+          type="text"
+          value={jobFilter}
+          onChange={(e) => setJobFilter(e.target.value)}
+          placeholder="Filter by job number or client name…"
+          className="w-full max-w-sm rounded-md px-3 py-1.5 text-sm outline-none"
+          style={{ border: "1px solid var(--rule)", background: "var(--paper-raised)", color: "var(--ink)" }}
+        />
+        {q !== "" && (
+          <p className="text-xs" style={{ color: "var(--label)" }}>
+            Showing rows matching &ldquo;{jobFilter.trim()}&rdquo; — pipeline runs filter by email subject/client since
+            they are not per-job.
+          </p>
+        )}
+      </div>
 
       <Section title="Agent heartbeat (VPS)">
         <table className="w-full">
@@ -158,7 +184,7 @@ export default function AdminPage() {
             <tr><Th>Run at</Th><Th>Subject</Th><Th>Client</Th><Th>Status</Th><Th>Jobs (written/skipped/failed)</Th><Th>Error</Th></tr>
           </thead>
           <tbody>
-            {summary.pipelineRuns.map((p, i) => (
+            {filteredPipelineRuns.map((p, i) => (
               <tr key={i}>
                 <Td>{fmtDateTime(p.run_at)}</Td>
                 <Td className="max-w-[240px] truncate">{p.email_subject}</Td>
@@ -168,8 +194,8 @@ export default function AdminPage() {
                 <Td className="max-w-[200px] truncate">{p.error}</Td>
               </tr>
             ))}
-            {summary.pipelineRuns.length === 0 && (
-              <tr><Td>No pipeline runs found.</Td><Td></Td><Td></Td><Td></Td><Td></Td><Td></Td></tr>
+            {filteredPipelineRuns.length === 0 && (
+              <tr><Td>{q ? "No pipeline runs match." : "No pipeline runs found."}</Td><Td></Td><Td></Td><Td></Td><Td></Td><Td></Td></tr>
             )}
           </tbody>
         </table>
@@ -181,7 +207,7 @@ export default function AdminPage() {
             <tr><Th>Run at</Th><Th>Job</Th><Th>Client</Th><Th>Status</Th><Th>Failed step</Th><Th>Duration</Th><Th>Error</Th></tr>
           </thead>
           <tbody>
-            {summary.rpaRuns.map((r, i) => (
+            {filteredRpaRuns.map((r, i) => (
               <tr key={i}>
                 <Td>{fmtDateTime(r.run_at)}</Td>
                 <Td>{r.job_number}</Td>
@@ -192,8 +218,8 @@ export default function AdminPage() {
                 <Td className="max-w-[200px] truncate">{r.error}</Td>
               </tr>
             ))}
-            {summary.rpaRuns.length === 0 && (
-              <tr><Td>No RPA runs found.</Td><Td></Td><Td></Td><Td></Td><Td></Td><Td></Td><Td></Td></tr>
+            {filteredRpaRuns.length === 0 && (
+              <tr><Td>{q ? "No RPA runs match." : "No RPA runs found."}</Td><Td></Td><Td></Td><Td></Td><Td></Td><Td></Td><Td></Td></tr>
             )}
           </tbody>
         </table>
@@ -205,7 +231,7 @@ export default function AdminPage() {
             <tr><Th>Job</Th><Th>Action</Th><Th>By</Th><Th>At</Th></tr>
           </thead>
           <tbody>
-            {summary.reviewActions.map((r, i) => (
+            {filteredReviewActions.map((r, i) => (
               <tr key={i}>
                 <Td>{r.job_number}</Td>
                 <Td>{r.review_action}</Td>
@@ -213,8 +239,8 @@ export default function AdminPage() {
                 <Td>{fmtDateTime(r.review_action_at)}</Td>
               </tr>
             ))}
-            {summary.reviewActions.length === 0 && (
-              <tr><Td>No review actions found.</Td><Td></Td><Td></Td><Td></Td></tr>
+            {filteredReviewActions.length === 0 && (
+              <tr><Td>{q ? "No review actions match." : "No review actions found."}</Td><Td></Td><Td></Td><Td></Td></tr>
             )}
           </tbody>
         </table>
