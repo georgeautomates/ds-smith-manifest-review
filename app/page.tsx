@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import type { Manifest, ManifestJob, ManifestAction, Recipient, CorrectableField, PendingChange } from "@/lib/db";
 import { ensureReviewerEmail } from "@/lib/reviewer";
+import { PdfViewer } from "@/components/pdf-viewer";
 
 type OtherPdfJob = {
   job_number: string;
@@ -760,12 +761,7 @@ function ManifestDetail({
             className={pdfHeight != null ? "shrink-0 flex flex-col min-h-0" : "flex-1 flex flex-col min-h-0"}
           >
             {pdfUrl ? (
-              <iframe
-                src={pdfUrl.replace("/view", "/preview")}
-                className="flex-1 w-full border-0"
-                title="Booking form PDF"
-                allow="autoplay"
-              />
+              <PdfViewer pdfUrl={pdfUrl} />
             ) : (
               <div className="flex-1 flex items-center justify-center px-6 text-center" style={{ background: "var(--paper-raised)" }}>
                 <span className="text-sm" style={{ color: "var(--label)" }}>No booking form on file for this manifest</span>
