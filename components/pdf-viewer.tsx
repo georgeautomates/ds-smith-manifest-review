@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { PDFDocumentProxy } from "pdfjs-dist";
+import type { PDFDocumentProxy, RenderTask } from "pdfjs-dist";
 
 // Google Drive's own /preview iframe viewer always fits the page to the
 // container's HEIGHT and centers it, padding the rest with solid black -
@@ -18,6 +18,7 @@ function driveFileId(url: string): string | null {
 export function PdfViewer({ pdfUrl }: { pdfUrl: string }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const renderTaskRef = useRef<RenderTask | null>(null);
   const [doc, setDoc] = useState<PDFDocumentProxy | null>(null);
   const [pageNum, setPageNum] = useState(1);
   const [numPages, setNumPages] = useState(1);
@@ -90,9 +91,20 @@ export function PdfViewer({ pdfUrl }: { pdfUrl: string }) {
         canvas.style.height = "auto";
         const ctx = canvas.getContext("2d");
         if (!ctx) return;
-        await page.render({ canvasContext: ctx, viewport, canvas }).promise;
+        // A ResizeObserver firing mid-render (dragging the panel handle, or
+        // the layout settling on mount) can start a second render() on this
+        // same canvas before the first one finishes - pdf.js throws instead
+        // of queueing. Cancelling the previous task via the ref (not just the
+        // `cancelled` flag, which only skips OUR OWN post-render state
+        // updates) is what actually stops that.
+        renderTaskRef.current?.cancel();
+        const task = page.render({ canvasContext: ctx, viewport, canvas });
+        renderTaskRef.current = task;
+        await task.promise;
+        if (renderTaskRef.current === task) renderTaskRef.current = null;
       } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : "Failed to render page");
+        const isCancel = e instanceof Error && e.name === "RenderingCancelledException";
+        if (!cancelled && !isCancel) setError(e instanceof Error ? e.message : "Failed to render page");
       }
     })();
     return () => { cancelled = true; };
