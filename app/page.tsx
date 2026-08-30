@@ -603,23 +603,46 @@ function OrderCheckRow({
 function otherJobStatus(job: OtherPdfJob): string {
   if (!job.found) return "not on file";
   if (job.review_action) return `${job.review_action}, handled on another email`;
-  return "awaiting review on another email";
+  return "not yet processed — on another email";
 }
 
 /**
- * A job from this PDF that isn't part of this email's own job list — dedup
- * already filed it under an earlier email, so it's read-only here: shown for
- * context (this is why the form's total looks bigger than this list), never
- * checkable, so a reviewer can't re-action something already decided. Still
- * carries the same extracted fields as a normal row so a reviewer can see
- * what that job actually was without leaving this manifest.
+ * A job from this PDF that isn't part of THIS email's own job list — DS
+ * Smith prints the same running job list on every manifest that day, so a
+ * job number showing up here just means its real row lives under a
+ * different message_id, not that it's somehow unreachable.
+ *
+ * Every order must stay processable regardless of which manifest screen a
+ * reviewer opens (see the multi-occurrence work this session) — an
+ * unactioned job here is a real gap, not settled history, so the whole row
+ * is a genuine link to the manifest where it actually lives (onNavigate,
+ * reusing the same ?job= deep-link lookup the notification emails use)
+ * rather than a permanently read-only placeholder. An ALREADY-actioned job
+ * stays view-only here on purpose: it's accurate history, and re-actioning
+ * it from a second screen would let two different manifest views both hold
+ * an action picker for the same underlying row.
  */
-function OtherJobRow({ job, expanded, onToggleExpand }: { job: OtherPdfJob; expanded: boolean; onToggleExpand: () => void }) {
+function OtherJobRow({
+  job,
+  expanded,
+  onToggleExpand,
+  onNavigate,
+}: {
+  job: OtherPdfJob;
+  expanded: boolean;
+  onToggleExpand: () => void;
+  onNavigate: () => void;
+}) {
+  const actionable = job.found && !job.review_action;
   return (
     <div style={{ borderBottom: "1px solid var(--rule)", background: "var(--paper-raised)" }}>
       <div
         className="flex items-start gap-2.5 px-3 py-2.5"
-        title="This job was on the same booking form but belongs to a different email — view-only here"
+        title={
+          actionable
+            ? "This job belongs to a different email — click to go process it there"
+            : "This job was on the same booking form but belongs to a different email"
+        }
       >
         <div
           className="mt-0.5 size-4 shrink-0 rounded-sm flex items-center justify-center"
@@ -628,17 +651,37 @@ function OtherJobRow({ job, expanded, onToggleExpand }: { job: OtherPdfJob; expa
           ○
         </div>
         <div className="min-w-0 flex-1">
-          <span className="tabular text-sm font-semibold" style={{ color: "var(--label)" }}>{job.job_number}</span>
+          {actionable ? (
+            <button
+              type="button"
+              onClick={onNavigate}
+              className="tabular text-sm font-semibold underline decoration-dotted cursor-pointer"
+              style={{ color: "var(--accent)" }}
+            >
+              {job.job_number}
+            </button>
+          ) : (
+            <span className="tabular text-sm font-semibold" style={{ color: "var(--label)" }}>{job.job_number}</span>
+          )}
           <div className="text-[11px] truncate" style={{ color: "var(--label)" }}>
             {job.delivery_point || job.collection_point || "—"}
           </div>
-          <div className="text-[10px] font-bold uppercase tracking-wide mt-0.5" style={{ color: "var(--label)" }}>
+          <div className="text-[10px] font-bold uppercase tracking-wide mt-0.5" style={{ color: actionable ? "var(--accent)" : "var(--label)" }}>
             {otherJobStatus(job)}
             {job.review_action_at ? ` · ${fmtDateTime(job.review_action_at)}` : ""}
             {job.review_action_by ? ` · ${job.review_action_by}` : ""}
           </div>
         </div>
-        {job.found && (
+        {actionable && (
+          <button
+            onClick={onNavigate}
+            className="shrink-0 px-2 py-1 rounded-sm text-[10px] font-bold uppercase tracking-wide cursor-pointer transition-colors"
+            style={{ background: "var(--accent)", color: "var(--accent-ink)" }}
+          >
+            Go process →
+          </button>
+        )}
+        {!actionable && job.found && (
           <button
             onClick={onToggleExpand}
             className="shrink-0 flex items-center gap-1 px-2 py-1 rounded-sm text-[10px] font-bold uppercase tracking-wide cursor-pointer transition-colors"
@@ -653,7 +696,7 @@ function OtherJobRow({ job, expanded, onToggleExpand }: { job: OtherPdfJob; expa
           </button>
         )}
       </div>
-      {expanded && job.found && (
+      {expanded && !actionable && job.found && (
         <div className="px-3 pb-3 grid grid-cols-2 gap-2">
           <ExtractionField label="Collection" value={job.collection_point} sub={job.collection_postcode} />
           <ExtractionField label="Delivery" value={job.delivery_point} sub={job.delivery_postcode} />
@@ -673,9 +716,11 @@ function OtherJobRow({ job, expanded, onToggleExpand }: { job: OtherPdfJob; expa
 function ManifestDetail({
   manifest,
   onProcessed,
+  onNavigateToJob,
 }: {
   manifest: Manifest;
   onProcessed: (messageId: string, jobNumbers: string[]) => void;
+  onNavigateToJob: (jobNumber: string) => void;
 }) {
   const pendingJobs = useMemo(() => manifest.jobs.filter((j) => !j.review_action), [manifest]);
   // Per-job selected action, defaulting to the system's own suggestion.
@@ -898,6 +943,7 @@ function ManifestDetail({
                   job={row.job}
                   expanded={expandedJob === row.job_number}
                   onToggleExpand={() => setExpandedJob((prev) => (prev === row.job_number ? null : row.job_number))}
+                  onNavigate={() => onNavigateToJob(row.job_number)}
                 />
               )
             )}
@@ -1183,6 +1229,20 @@ export default function Page() {
 
   const selected = visible.find((m) => m.message_id === selectedId) ?? null;
 
+  // Jump to whichever manifest a given job number actually lives under.
+  // Same lookup the ?job= deep-link effect above uses on page load — reused
+  // here for in-app navigation (e.g. clicking an unactioned "other job" on
+  // the current PDF that turns out to belong to a different email). Every
+  // order must stay reachable and processable regardless of which manifest
+  // screen a reviewer started from — this is what makes that true for a job
+  // whose real row isn't part of the manifest currently open.
+  function navigateToJob(jobNumber: string) {
+    const target = manifests.find((m) => m.jobs.some((j) => j.job_number === jobNumber));
+    if (!target) return;
+    setFilter(isPending(target) ? "new" : "processed");
+    setSelectedId(target.message_id);
+  }
+
   function handleProcessed(messageId: string, jobNumbers: string[]) {
     setManifests((prev) => prev.map((m) => {
       if (m.message_id !== messageId) return m;
@@ -1294,7 +1354,7 @@ export default function Page() {
 
           {/* Detail panel */}
           {selected ? (
-            <ManifestDetail manifest={selected} onProcessed={handleProcessed} />
+            <ManifestDetail manifest={selected} onProcessed={handleProcessed} onNavigateToJob={navigateToJob} />
           ) : (
             <div className="flex-1 flex items-center justify-center text-sm" style={{ color: "var(--label)" }}>
               {filter === "new" ? "Nothing waiting for review." : "Select a manifest to view it."}

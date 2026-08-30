@@ -179,6 +179,14 @@ function buildManifest(msgId: string, jobs: ManifestJob[]): Manifest {
 
 // ── Queries ──────────────────────────────────────────────────────────────────
 
+// Temporary UI-only exclusion — hides this session's own test replay
+// manifest from the dashboard so tomorrow's real DS Smith traffic isn't
+// cluttered by it. Data untouched, nothing else affected; safe to remove
+// this array (and its use below) once no longer needed.
+const HIDDEN_MESSAGE_IDS: string[] = [
+  "AAMkAGFlMGY1OTU0LTZiMzAtNGM1Ny05ZTJhLTllYmNmMTI4ZTI5ZABGAAAAAABB74Gg7YX0Q66BvBJLDp_uBwCLTVhQkYP3QLBlmY7M8-SKAAAAAAEMAACLTVhQkYP3QLBlmY7M8-SKAACsmgMUAAA=",
+];
+
 const SELECT_COLS = `
   job_number, client_name, message_id, processed_at, pdf_url, pdf_job_numbers,
   collection_point, collection_postcode, delivery_point, delivery_postcode,
@@ -210,6 +218,7 @@ export async function getPendingManifests(): Promise<Manifest[]> {
   const byMessage: Record<string, ManifestJob[]> = {};
   for (const row of rows) {
     const job = rowToJob(row);
+    if (HIDDEN_MESSAGE_IDS.includes(job.message_id)) continue;
     if (!byMessage[job.message_id]) byMessage[job.message_id] = [];
     byMessage[job.message_id].push(job);
   }
@@ -229,6 +238,7 @@ export async function getAllManifests(): Promise<Manifest[]> {
   const byMessage: Record<string, ManifestJob[]> = {};
   for (const row of rows) {
     const job = rowToJob(row);
+    if (HIDDEN_MESSAGE_IDS.includes(job.message_id)) continue;
     if (!byMessage[job.message_id]) byMessage[job.message_id] = [];
     byMessage[job.message_id].push(job);
   }
