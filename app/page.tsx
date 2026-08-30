@@ -822,15 +822,16 @@ function ManifestDetail({
           </div>
           <div className="shrink-0 px-3 py-3" style={{ borderTop: "1px solid var(--rule)", background: "var(--paper-raised)" }}>
             {error && <div className="text-xs mb-2" style={{ color: "var(--cancel)" }}>{error}</div>}
-            {/* Named "Mark as handled" (commit 03ffcfa, 2026-08-19) on the reasoning that
-                nothing downstream read review_action yet, so a "Process" button would
-                overstate what clicking it does. That stopped being true the very next day
-                (commit 18ac127, 2026-08-20, firmin/agent.py's run_pending_client_portal_rpa):
-                any job saved here with action Add or Update is picked up by the live poll
-                loop within ~60s and run through the real Client Portal RPA (fills the form,
-                screenshots, does not submit). Cancel/Ignore still trigger nothing — those
-                remain a human's job in Proteo. The helper text below reflects this now;
-                don't let it drift out of sync with agent.py again. */}
+            {/* Was "Mark as handled" (commit 03ffcfa, 2026-08-19), then "Save N decisions" —
+                both hedged on the reasoning that "Process" would overstate what clicking it
+                does. That stopped being true the very next day (commit 18ac127, 2026-08-20,
+                firmin/agent.py's run_pending_client_portal_rpa): any job saved here with
+                action Add or Update is picked up by the live poll loop within ~60s and run
+                through the real Client Portal RPA (fills the form, screenshots, does not
+                submit). Renamed to "Process N orders" 2026-08-30 (George: most legible
+                wording for admin staff) — Cancel/Ignore still trigger nothing, those remain
+                a human's job in Proteo. The helper text below reflects this now; don't let
+                it drift out of sync with agent.py again. */}
             <button
               onClick={handleProcess}
               disabled={processing || pendingJobs.length === 0}
@@ -838,13 +839,13 @@ function ManifestDetail({
               style={{ background: "var(--accent)", color: "var(--accent-ink)" }}
             >
               {processing
-                ? "Saving…"
+                ? "Processing…"
                 : pendingJobs.length === 0
-                  ? "All decisions recorded"
-                  : `Save ${pendingJobs.length} decision${pendingJobs.length === 1 ? "" : "s"}`}
+                  ? "All orders processed"
+                  : `Process ${pendingJobs.length} order${pendingJobs.length === 1 ? "" : "s"}`}
             </button>
             <div className="text-[10px] mt-1.5 leading-snug text-center" style={{ color: "var(--label)" }}>
-              Records your decision. Add/Update jobs trigger the Client Portal RPA
+              Records your decision on each order. Add/Update jobs trigger the Client Portal RPA
               automatically (fills the form, screenshot only — never submits). Cancel/Ignore
               still need applying by hand in Proteo.
             </div>
@@ -1108,7 +1109,7 @@ export default function Page() {
     // Re-fetch to pick up the real actions/timestamps written server-side.
     load();
     setFilter("new");
-    showToast(`${jobNumbers.length} decision${jobNumbers.length === 1 ? "" : "s"} recorded`);
+    showToast(`${jobNumbers.length} order${jobNumbers.length === 1 ? "" : "s"} processed`);
   }
 
   return (
