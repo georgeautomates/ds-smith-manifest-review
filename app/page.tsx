@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import type { Manifest, ManifestJob, ManifestAction, Recipient, CorrectableField, PendingChange } from "@/lib/db";
-import { ensureReviewerEmail } from "@/lib/reviewer";
 import { PdfViewer } from "@/components/pdf-viewer";
 
 type OtherPdfJob = {
@@ -187,7 +186,6 @@ function CorrectableExtractionField({
     setSaving(true);
     setError("");
     try {
-      const proposedBy = ensureReviewerEmail();
       const res = await fetch("/api/manifests/correction", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -197,7 +195,6 @@ function CorrectableExtractionField({
           current_value: value,
           new_value: newValue.trim(),
           reason: reason.trim(),
-          proposed_by: proposedBy,
         }),
       });
       const data = await res.json();
@@ -216,7 +213,6 @@ function CorrectableExtractionField({
     setSaving(true);
     setError("");
     try {
-      const appliedBy = ensureReviewerEmail();
       const res = await fetch("/api/manifests/correction/apply", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -224,7 +220,6 @@ function CorrectableExtractionField({
           job_number: jobNumber,
           field: fieldKey,
           proposed_at: change.proposed_at,
-          applied_by: appliedBy,
         }),
       });
       const data = await res.json();
@@ -733,14 +728,13 @@ function ManifestDetail({
     setProcessing(true);
     setError("");
     try {
-      const reviewedBy = ensureReviewerEmail();
       for (const job of pendingJobs) {
         const action: ManifestAction = selectedActions[job.job_number] ?? defaultAction(job);
         const source: "suggested" | "override" = job.suggested_action === action ? "suggested" : "override";
         const res = await fetch("/api/manifests/action", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ job_number: job.job_number, action, source, reviewed_by: reviewedBy }),
+          body: JSON.stringify({ job_number: job.job_number, action, source }),
         });
         const data = await res.json();
         if (!res.ok || !data.ok) throw new Error(data.error ?? `Failed to save ${job.job_number}`);

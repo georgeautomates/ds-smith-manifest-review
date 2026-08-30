@@ -10,23 +10,16 @@ import { NextRequest } from "next/server";
  * themselves; Container Apps strips and overwrites it, so its presence is
  * proof the request passed through the sidecar.
  *
- * Replaces the client-supplied proposed_by/applied_by/reviewed_by fields
- * lib/reviewer.ts used to send, which came from a browser prompt() and
- * could not be trusted for anything beyond "no worse than a blank audit
- * trail." Called from the API routes (server side), not client components —
- * headers are only readable there.
+ * Easy Auth is confirmed live as of 2026-08-30 — the client no longer sends
+ * proposed_by/applied_by/reviewed_by at all (the old prompt()-based
+ * lib/reviewer.ts stopgap was removed). Called from the API routes (server
+ * side), not client components — headers are only readable there.
  *
  * https://learn.microsoft.com/en-us/azure/container-apps/authentication#access-user-claims-in-application-code
  *
- * unverifiedFallback: TRANSITIONAL ONLY, remove once Easy Auth is confirmed
- * live (Ayon is waiting on Karl for the Entra app registration as of
- * 2026-08-26 — see project_2026-08-21_next_session_auth memory). Until then
- * the header is never present — nothing forwards it locally or in any
- * deployment that hasn't got Easy Auth turned on — so falling through to
- * the old prompt()-based value keeps the app usable rather than hard-403ing
- * every correction/action for the whole transition window. Once Easy Auth
- * is live the header is always present and this fallback is simply never
- * reached again; no second deploy is needed to "turn on" the real check.
+ * unverifiedFallback: kept as a defensive fallback for local dev, where no
+ * Easy Auth sidecar is present to inject the header. Production always has
+ * the header, so this branch is never reached there.
  */
 export function getVerifiedReviewerEmail(req: NextRequest, unverifiedFallback?: string): string {
   const verified = req.headers.get("x-ms-client-principal-name");

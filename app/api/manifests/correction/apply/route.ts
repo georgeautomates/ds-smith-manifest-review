@@ -17,8 +17,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: "proposed_at is required to identify which correction to apply" }, { status: 400 });
     }
 
-    // Server-verified identity when Easy Auth is live; falls back to the
-    // client-supplied value only during the transition — see lib/identity.ts.
+    // Server-verified identity from Easy Auth — see lib/identity.ts.
     const appliedBy = getVerifiedReviewerEmail(req, typeof applied_by === "string" ? applied_by : "");
     if (!appliedBy) {
       return NextResponse.json({ ok: false, error: "applied_by is required" }, { status: 400 });

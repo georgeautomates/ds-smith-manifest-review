@@ -19,10 +19,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: 'source must be "suggested" or "override"' }, { status: 400 });
     }
 
-    // Server-verified identity when Easy Auth is live; falls back to the
-    // client-supplied value only during the transition — see lib/identity.ts.
-    // Matches this route's original leniency: reviewed_by may end up blank,
-    // unlike correction/apply below, which require a real identity.
+    // Server-verified identity from Easy Auth — see lib/identity.ts.
+    // reviewed_by may end up blank (e.g. local dev with no Easy Auth
+    // sidecar), unlike correction/apply below, which require a real identity.
     const reviewedBy = getVerifiedReviewerEmail(req, typeof reviewed_by === "string" ? reviewed_by : "");
 
     await saveManifestAction({
