@@ -355,11 +355,9 @@ const ACTION_HINT: Record<ManifestAction, string> = {
  * suggested/override source.
  */
 function ActionPicker({
-  job,
   selected,
   onSelect,
 }: {
-  job: ManifestJob;
   selected: ManifestAction;
   onSelect: (action: ManifestAction) => void;
 }) {
@@ -371,15 +369,13 @@ function ActionPicker({
       <div className="flex gap-1 flex-wrap">
         {MANIFEST_ACTIONS.map((action) => {
           const isSelected = selected === action;
-          const isSuggested = job.suggested_action === action;
           const style = ACTION_STYLE[action];
-          const hint = ACTION_HINT[action] + (isSuggested ? " (system-suggested)" : "");
           return (
             <button
               key={action}
               type="button"
               onClick={() => onSelect(action)}
-              title={hint}
+              title={ACTION_HINT[action]}
               className="text-[10px] font-bold uppercase tracking-wide px-2 py-1 rounded-sm border-2 transition-colors"
               style={
                 // Tinted + bold border for "your current pick," not the solid fill —
@@ -394,7 +390,6 @@ function ActionPicker({
               }
             >
               {action}
-              {isSuggested && !isSelected && <span className="ml-1 opacity-70">•</span>}
             </button>
           );
         })}
@@ -510,7 +505,7 @@ function OrderCheckRow({
             {job.delivery_point || job.collection_point || "—"}
           </div>
           <PriorOccurrenceBadge jobNumber={job.job_number} currentMessageId={job.message_id} />
-          {job.suggested_action === "Review" ? (
+          {job.suggested_action === "Review" && (
             <div
               className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide mt-0.5 px-1.5 py-0.5 rounded-sm"
               style={{ background: "var(--cancel-tint)", color: "var(--cancel)" }}
@@ -518,11 +513,7 @@ function OrderCheckRow({
             >
               Needs review
             </div>
-          ) : job.suggested_action ? (
-            <div className="text-[10px] font-bold uppercase tracking-wide mt-0.5" style={{ color: "var(--label)" }}>
-              Suggested: {job.suggested_action}
-            </div>
-          ) : null}
+          )}
           {/* A decided job showed the SAME interactive 4-button picker as a still-pending
               one, with its already-saved action rendered solid-filled — visually identical
               to a fresh, unsaved selection. Confirmed real 2026-08-26: caused a genuine
@@ -539,7 +530,7 @@ function OrderCheckRow({
               ✓ {job.review_action}
             </div>
           ) : (
-            <ActionPicker job={job} selected={selectedAction} onSelect={onSelectAction} />
+            <ActionPicker selected={selectedAction} onSelect={onSelectAction} />
           )}
           {/* Only shown when the extracted data genuinely differs from what's on
               file — that reason carries the actual field-level diff
