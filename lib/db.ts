@@ -13,11 +13,18 @@ function getPool(): Pool {
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-export type ManifestAction = "Add" | "Update" | "Cancel" | "Ignore";
+// Only two real actions exist: Add (enter it in the Client Portal — covers
+// a genuinely new order, one whose data changed, AND one that matches what's
+// on file but was never actually RPA'd) and Cancel (handled manually in
+// Proteo, never touched by this app). Update and Ignore were removed —
+// there's no order-amendment path into Proteo from here, and "seen before"
+// is now shown directly via a badge (see getJobOccurrences) rather than a
+// suggested_action value silently steering a reviewer away from an order.
+export type ManifestAction = "Add" | "Cancel";
 // What the classifier proposes — a superset of ManifestAction. "Review" means
 // the classifier isn't confident enough to suggest a real action (e.g. a
 // reply-chain email, not a clean new order/amendment) — the reviewer must
-// still pick one of the four real ManifestAction values themselves.
+// still pick one of the two real ManifestAction values themselves.
 export type SuggestedAction = ManifestAction | "Review";
 
 // A field a reviewer is allowed to propose a correction for. Deliberately an
@@ -300,8 +307,66 @@ export async function getKnownJobs(jobNumbers: string[]): Promise<OtherJob[]> {
   }));
 }
 
+export type JobOccurrence = {
+  job_number: string;
+  message_id: string;
+  email_subject: string;
+  processed_at: string;
+  review_action: ManifestAction | "";
+  review_action_at: string;
+  rpa_processed: boolean;
+  rpa_processed_at: string;
+};
+
+/**
+ * Every past sighting of one job_number, newest first — every email it's
+ * ever appeared in, with whether each occurrence has genuinely gone through
+ * the Client Portal RPA (from rpa_entry_mirror, a Postgres mirror of the
+ * real RPA Entry Google Sheet — see firmin/verification.py's
+ * ClientPortalRpaPipeline._write_row(); this Next.js app has no path to
+ * read the Sheet directly). Backs the Manifest Review dashboard's "seen
+ * before" badge — st_regis_orders' primary key is now the composite
+ * (job_number, message_id), so a job_number can legitimately have several
+ * rows, one per email.
+ *
+ * "rpa_processed" is deliberately NOT the same thing as "review_action is
+ * set" — Cancel doesn't touch the RPA at all, and a reviewer clicking Add
+ * doesn't guarantee the RPA has actually run yet (it fires on the agent's
+ * next poll cycle). This only reflects a genuine completed RPA run.
+ */
+export async function getJobOccurrences(jobNumber: string): Promise<JobOccurrence[]> {
+  const pool = getPool();
+  const { rows } = await pool.query(
+    `SELECT o.job_number, o.message_id, o.email_subject, o.processed_at,
+            o.review_action, o.review_action_at,
+            m.processed_at AS rpa_processed_at
+     FROM st_regis_orders o
+     LEFT JOIN LATERAL (
+       SELECT processed_at
+       FROM rpa_entry_mirror
+       WHERE job_number = o.job_number AND success = true
+       ORDER BY processed_at DESC
+       LIMIT 1
+     ) m ON true
+     WHERE o.job_number = $1
+     ORDER BY o.processed_at DESC`,
+    [jobNumber]
+  );
+  return rows.map((r) => ({
+    job_number: String(r.job_number ?? ""),
+    message_id: String(r.message_id ?? ""),
+    email_subject: String(r.email_subject ?? ""),
+    processed_at: r.processed_at ? String(r.processed_at) : "",
+    review_action: (r.review_action as ManifestAction) || "",
+    review_action_at: r.review_action_at ? String(r.review_action_at) : "",
+    rpa_processed: r.rpa_processed_at != null,
+    rpa_processed_at: r.rpa_processed_at ? String(r.rpa_processed_at) : "",
+  }));
+}
+
 export type ManifestActionDecision = {
   job_number: string;
+  message_id: string;
   action: ManifestAction;
   source: "suggested" | "override";
   reviewed_by: string;
@@ -313,14 +378,22 @@ export type ManifestActionDecision = {
  * (owned by firmin.clients.manifest_review, the Python classifier) or
  * manual_verdict/manual_reason (the separate PASS/FAIL accuracy audit on
  * st-regis-dashboard's /manager screen — a different table use entirely).
+ *
+ * Targets (job_number, message_id) together, not job_number alone —
+ * st_regis_orders' primary key is now that composite pair, since DS Smith
+ * resends the same job_number across genuinely separate emails and each
+ * occurrence gets its own row. A job_number-only WHERE here would set
+ * review_action on every occurrence at once, which is exactly the bug this
+ * whole multi-occurrence change exists to fix: each occurrence must stay
+ * independently actionable.
  */
 export async function saveManifestAction(decision: ManifestActionDecision): Promise<void> {
   const pool = getPool();
   await pool.query(
     `UPDATE st_regis_orders
      SET review_action = $1, review_action_source = $2, review_action_by = $3, review_action_at = now()
-     WHERE job_number = $4`,
-    [decision.action, decision.source, decision.reviewed_by, decision.job_number]
+     WHERE job_number = $4 AND message_id = $5`,
+    [decision.action, decision.source, decision.reviewed_by, decision.job_number, decision.message_id]
   );
 }
 
@@ -337,6 +410,7 @@ export async function saveManifestAction(decision: ManifestActionDecision): Prom
 
 export type ProposeCorrectionInput = {
   job_number: string;
+  message_id: string;
   field: CorrectableField;
   current_value: string;
   new_value: string;
@@ -344,6 +418,10 @@ export type ProposeCorrectionInput = {
   proposed_by: string;
 };
 
+// message_id required alongside job_number, same reasoning as
+// saveManifestAction above — st_regis_orders' PK is the composite pair,
+// so job_number alone could append this correction onto every occurrence
+// of the job_number rather than the one specific occurrence being edited.
 export async function proposeCorrection(input: ProposeCorrectionInput): Promise<void> {
   if (!input.reason.trim()) throw new Error("A reason is required for a correction");
   const pool = getPool();
@@ -361,13 +439,14 @@ export async function proposeCorrection(input: ProposeCorrectionInput): Promise<
   await pool.query(
     `UPDATE st_regis_orders
      SET pending_changes = pending_changes || $1::jsonb
-     WHERE job_number = $2`,
-    [JSON.stringify([change]), input.job_number]
+     WHERE job_number = $2 AND message_id = $3`,
+    [JSON.stringify([change]), input.job_number, input.message_id]
   );
 }
 
 export type ApplyCorrectionInput = {
   job_number: string;
+  message_id: string;
   field: CorrectableField;
   // Identifies which pending_changes entry to apply — matched on
   // field + proposed_at, since a job can have more than one pending
@@ -380,12 +459,19 @@ export type ApplyCorrectionInput = {
  * Writes a previously-proposed correction into its real column, and marks
  * that pending_changes entry as applied (applied_by/applied_at) rather than
  * removing it — the proposal stays in the audit trail alongside the outcome.
+ *
+ * Both the read and the write are scoped to (job_number, message_id), not
+ * job_number alone — same reasoning as saveManifestAction/proposeCorrection
+ * above. Without message_id here, the SELECT could read an unrelated
+ * occurrence's pending_changes (whichever row Postgres happens to return
+ * first for a bare job_number match) and the UPDATE could apply the
+ * correction onto every occurrence of the job_number at once.
  */
 export async function applyCorrection(input: ApplyCorrectionInput): Promise<void> {
   const pool = getPool();
   const { rows } = await pool.query(
-    `SELECT pending_changes FROM st_regis_orders WHERE job_number = $1`,
-    [input.job_number]
+    `SELECT pending_changes FROM st_regis_orders WHERE job_number = $1 AND message_id = $2`,
+    [input.job_number, input.message_id]
   );
   if (rows.length === 0) throw new Error(`No order found for job ${input.job_number}`);
   const changes: PendingChange[] = Array.isArray(rows[0].pending_changes) ? rows[0].pending_changes : [];
@@ -404,8 +490,8 @@ export async function applyCorrection(input: ApplyCorrectionInput): Promise<void
   // input.field is validated against the allowlist above, so this identifier
   // interpolation is safe — never build this from unvalidated request input.
   await pool.query(
-    `UPDATE st_regis_orders SET ${input.field} = $1, pending_changes = $2::jsonb WHERE job_number = $3`,
-    [target.current, JSON.stringify(changes), input.job_number]
+    `UPDATE st_regis_orders SET ${input.field} = $1, pending_changes = $2::jsonb WHERE job_number = $3 AND message_id = $4`,
+    [target.current, JSON.stringify(changes), input.job_number, input.message_id]
   );
 }
 

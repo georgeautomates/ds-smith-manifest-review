@@ -5,10 +5,13 @@ import { getVerifiedReviewerEmail } from "@/lib/identity";
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { job_number, field, proposed_at, applied_by } = body ?? {};
+    const { job_number, message_id, field, proposed_at, applied_by } = body ?? {};
 
     if (!job_number || typeof job_number !== "string") {
       return NextResponse.json({ ok: false, error: "job_number is required" }, { status: 400 });
+    }
+    if (!message_id || typeof message_id !== "string") {
+      return NextResponse.json({ ok: false, error: "message_id is required" }, { status: 400 });
     }
     if (!CORRECTABLE_FIELDS.includes(field)) {
       return NextResponse.json({ ok: false, error: `field must be one of ${CORRECTABLE_FIELDS.join(", ")}` }, { status: 400 });
@@ -25,6 +28,7 @@ export async function POST(req: NextRequest) {
 
     await applyCorrection({
       job_number,
+      message_id,
       field: field as CorrectableField,
       proposed_at,
       applied_by: appliedBy,

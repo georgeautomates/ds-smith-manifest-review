@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
-import type { Manifest, ManifestJob, ManifestAction, Recipient, CorrectableField, PendingChange } from "@/lib/db";
+import type { Manifest, ManifestJob, ManifestAction, Recipient, CorrectableField, PendingChange, JobOccurrence } from "@/lib/db";
 import { PdfViewer } from "@/components/pdf-viewer";
 
 type OtherPdfJob = {
@@ -148,6 +148,7 @@ function CorrectableExtractionField({
   value,
   sub,
   jobNumber,
+  messageId,
   pendingChanges,
   onProposed,
 }: {
@@ -156,6 +157,7 @@ function CorrectableExtractionField({
   value: string;
   sub?: string;
   jobNumber: string;
+  messageId: string;
   pendingChanges: PendingChange[];
   onProposed: () => void;
 }) {
@@ -191,6 +193,7 @@ function CorrectableExtractionField({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           job_number: jobNumber,
+          message_id: messageId,
           field: fieldKey,
           current_value: value,
           new_value: newValue.trim(),
@@ -218,6 +221,7 @@ function CorrectableExtractionField({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           job_number: jobNumber,
+          message_id: messageId,
           field: fieldKey,
           proposed_at: change.proposed_at,
         }),
@@ -321,41 +325,34 @@ function CorrectableExtractionField({
   );
 }
 
-const MANIFEST_ACTIONS: ManifestAction[] = ["Add", "Update", "Cancel", "Ignore"];
+const MANIFEST_ACTIONS: ManifestAction[] = ["Add", "Cancel"];
 
-// Per-action colour, keyed to this file's existing --add/--update/--cancel/
-// --ignore CSS variables (already used elsewhere for suggestion badges) so
-// the picker matches whichever theme (light/dark) the page is rendering in.
-// White text on all 4 — every one of these is a mid-to-dark colour in both
-// themes (see app/globals.css), so a single fixed ink colour is simpler than
-// inventing new per-action -ink tokens for one component.
+// Per-action colour, keyed to this file's existing --add/--cancel CSS
+// variables (already used elsewhere for suggestion badges) so the picker
+// matches whichever theme (light/dark) the page is rendering in. White text
+// on both — each is a mid-to-dark colour in both themes (see
+// app/globals.css), so a single fixed ink colour is simpler than inventing
+// new per-action -ink tokens for one component.
 const ACTION_STYLE: Record<ManifestAction, { bg: string; tint: string; border: string }> = {
   Add:    { bg: "var(--add)",    tint: "var(--add-tint)",    border: "var(--add)" },
-  Update: { bg: "var(--update)", tint: "var(--update-tint)", border: "var(--update)" },
   Cancel: { bg: "var(--cancel)", tint: "var(--cancel-tint)", border: "var(--cancel)" },
-  Ignore: { bg: "var(--ignore)", tint: "var(--ignore-tint)", border: "var(--ignore)" },
 };
 
 // What each action actually means, in the reviewer's own terms, not the
 // system's. Shown as each button's tooltip so the meaning is one hover away
-// without permanently costing row height — confirmed real 2026-08-28: a
-// first-time user sees 4 bare buttons (Add/Update/Cancel/Ignore) with no way
-// to tell what any of them mean without already knowing the mental model.
+// without permanently costing row height. Update and Ignore were removed —
+// there's no order-amendment path into Proteo from here, and a repeat order
+// is now shown directly via the "seen before" badge rather than a separate
+// action a reviewer has to choose.
 const ACTION_HINT: Record<ManifestAction, string> = {
-  Add: "This is a genuine new order — fills the Client Portal automatically, you still confirm it there",
-  Update: "An existing order changed (date, time, price, etc.) — fills the updated values, you still confirm in the Portal",
+  Add: "This order needs entering in the Client Portal — fills it automatically, you still confirm it there. Covers a genuine new order and a repeat that hasn't actually been processed yet.",
   Cancel: "DS Smith cancelled this order — you cancel it in Proteo by hand, nothing automatic happens here",
-  Ignore: "Not a real order (a reply, a duplicate, an FYI) — marks it handled, nothing else happens",
 };
 
 /**
- * Lets a reviewer force ANY of the 4 actions, not just accept-the-suggestion
- * or fall back to Ignore. Before this, a job the classifier suggested Ignore
- * had no way to be rescued as a real Add/Update, and a suggested Add/Update
- * could not be redirected to Cancel — the only lever was checked (accept
- * suggestion) vs unchecked (force Ignore). The backend API
- * (app/api/manifests/action/route.ts) already accepted all 4 actions with a
- * suggested/override source — this was a frontend-only gap.
+ * Lets a reviewer force either action, not just accept the suggestion. The
+ * backend API (app/api/manifests/action/route.ts) accepts both with a
+ * suggested/override source.
  */
 function ActionPicker({
   job,
@@ -406,6 +403,87 @@ function ActionPicker({
   );
 }
 
+function occurrenceStatus(o: JobOccurrence): string {
+  if (o.rpa_processed) return "processed via RPA";
+  if (o.review_action === "Cancel") return "cancelled";
+  return "not yet processed";
+}
+
+/**
+ * "Seen before" indicator — a small pill next to the job number, only
+ * rendered when this job_number has more than one row in st_regis_orders
+ * (st_regis_orders' primary key is now (job_number, message_id), so a real
+ * repeat is a genuinely separate row, not a merged/overwritten one — see
+ * the multi-occurrence migration). Stays a link/expand, not a separate
+ * read-only list item like OtherJobRow, because every occurrence — this
+ * one included — must stay independently actionable: this badge is
+ * informational only, it never blocks or pre-fills the ActionPicker above it.
+ *
+ * Fetches lazily on first expand, not prefetched for every row — avoids an
+ * N+1 burst of requests across a 40-job manifest when most jobs have never
+ * repeated at all.
+ */
+function PriorOccurrenceBadge({ jobNumber, currentMessageId }: { jobNumber: string; currentMessageId: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const [occurrences, setOccurrences] = useState<JobOccurrence[] | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  async function toggle() {
+    const next = !expanded;
+    setExpanded(next);
+    if (next && occurrences === null) {
+      setLoading(true);
+      try {
+        const res = await fetch(`/api/manifests/job-occurrences/${encodeURIComponent(jobNumber)}`);
+        const data = await res.json();
+        setOccurrences((data.occurrences ?? []) as JobOccurrence[]);
+      } catch {
+        setOccurrences([]);
+      } finally {
+        setLoading(false);
+      }
+    }
+  }
+
+  // Prior occurrences only — the current row's own sighting doesn't count
+  // as "seen before" from its own perspective.
+  const others = (occurrences ?? []).filter((o) => o.message_id !== currentMessageId);
+  if (occurrences !== null && others.length === 0) return null;
+
+  return (
+    <div className="mt-1">
+      <button
+        type="button"
+        onClick={toggle}
+        className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-sm border"
+        style={{ background: "var(--paper-raised)", color: "var(--ink-soft)", borderColor: "var(--rule)" }}
+      >
+        {occurrences === null ? "Seen before?" : `Seen ${others.length + 1}× before`}
+        <span className="tabular">{expanded ? "▾" : "▸"}</span>
+      </button>
+      {expanded && (
+        <div className="mt-1 rounded-sm border" style={{ borderColor: "var(--rule)", background: "var(--paper-raised)" }}>
+          {loading ? (
+            <div className="px-2 py-1.5 text-[10px]" style={{ color: "var(--label)" }}>Loading…</div>
+          ) : others.length === 0 ? (
+            <div className="px-2 py-1.5 text-[10px]" style={{ color: "var(--label)" }}>No other occurrences</div>
+          ) : (
+            others.map((o) => (
+              <div key={o.message_id} className="px-2 py-1.5 text-[10px] leading-snug" style={{ borderTop: "1px solid var(--rule)" }}>
+                <div className="font-semibold truncate" style={{ color: "var(--ink)" }}>{o.email_subject || "(no subject)"}</div>
+                <div style={{ color: "var(--label)" }}>
+                  {o.review_action || "unreviewed"} · {occurrenceStatus(o)}
+                  {o.review_action_at ? ` · ${fmtDateTime(o.review_action_at)}` : ""}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function OrderCheckRow({
   job,
   selectedAction,
@@ -431,6 +509,7 @@ function OrderCheckRow({
           <div className="text-[11px] truncate" style={{ color: "var(--label)" }}>
             {job.delivery_point || job.collection_point || "—"}
           </div>
+          <PriorOccurrenceBadge jobNumber={job.job_number} currentMessageId={job.message_id} />
           {job.suggested_action === "Review" ? (
             <div
               className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide mt-0.5 px-1.5 py-0.5 rounded-sm"
@@ -462,11 +541,12 @@ function OrderCheckRow({
           ) : (
             <ActionPicker job={job} selected={selectedAction} onSelect={onSelectAction} />
           )}
-          {/* The reason, not just the verdict. On an Update this carries the actual
-              field-level diff ("delivery_date: 17/08/2026 -> 18/08/2026"), which is the
-              only place the OLD value exists — the row itself already shows the new one.
-              The Client Portal RPA has no update path, so applying an amendment is a
-              human job, and it cannot be done from a badge that says "Update" alone. */}
+          {/* The reason, not just the verdict. When the extracted data differs from
+              what's on file, this carries the actual field-level diff
+              ("delivery_date: 17/08/2026 -> 18/08/2026"), which is the only place
+              the OLD value exists — the row itself already shows the new one. The
+              Client Portal RPA has no update-in-place path, so applying a change
+              from a resend is still a human job at Add time. */}
           {job.suggested_reason && (
             <div className="text-[10px] mt-0.5 leading-snug" style={{ color: "var(--ink-soft)" }}>
               {job.suggested_reason}
@@ -489,25 +569,25 @@ function OrderCheckRow({
       {expanded && (
         <div className="px-3 pb-3 grid grid-cols-2 gap-2" style={{ background: "var(--paper-raised)" }}>
           <CorrectableExtractionField label="Collection" fieldKey="collection_point" value={job.collection_point} sub={job.collection_postcode}
-            jobNumber={job.job_number} pendingChanges={pendingChanges} onProposed={onCorrectionChanged} />
+            jobNumber={job.job_number} messageId={job.message_id} pendingChanges={pendingChanges} onProposed={onCorrectionChanged} />
           <CorrectableExtractionField label="Delivery" fieldKey="delivery_point" value={job.delivery_point} sub={job.delivery_postcode}
-            jobNumber={job.job_number} pendingChanges={pendingChanges} onProposed={onCorrectionChanged} />
+            jobNumber={job.job_number} messageId={job.message_id} pendingChanges={pendingChanges} onProposed={onCorrectionChanged} />
           <CorrectableExtractionField label="Collection date" fieldKey="collection_date" value={job.collection_date}
-            jobNumber={job.job_number} pendingChanges={pendingChanges} onProposed={onCorrectionChanged} />
+            jobNumber={job.job_number} messageId={job.message_id} pendingChanges={pendingChanges} onProposed={onCorrectionChanged} />
           <CorrectableExtractionField label="Collection time" fieldKey="collection_time" value={job.collection_time}
-            jobNumber={job.job_number} pendingChanges={pendingChanges} onProposed={onCorrectionChanged} />
+            jobNumber={job.job_number} messageId={job.message_id} pendingChanges={pendingChanges} onProposed={onCorrectionChanged} />
           <CorrectableExtractionField label="Delivery date" fieldKey="delivery_date" value={job.delivery_date}
-            jobNumber={job.job_number} pendingChanges={pendingChanges} onProposed={onCorrectionChanged} />
+            jobNumber={job.job_number} messageId={job.message_id} pendingChanges={pendingChanges} onProposed={onCorrectionChanged} />
           <CorrectableExtractionField label="Delivery time" fieldKey="delivery_time" value={job.delivery_time}
-            jobNumber={job.job_number} pendingChanges={pendingChanges} onProposed={onCorrectionChanged} />
+            jobNumber={job.job_number} messageId={job.message_id} pendingChanges={pendingChanges} onProposed={onCorrectionChanged} />
           <CorrectableExtractionField label="Price" fieldKey="price" value={job.price}
-            jobNumber={job.job_number} pendingChanges={pendingChanges} onProposed={onCorrectionChanged} />
+            jobNumber={job.job_number} messageId={job.message_id} pendingChanges={pendingChanges} onProposed={onCorrectionChanged} />
           <CorrectableExtractionField label="Order number" fieldKey="order_number" value={job.order_number}
-            jobNumber={job.job_number} pendingChanges={pendingChanges} onProposed={onCorrectionChanged} />
+            jobNumber={job.job_number} messageId={job.message_id} pendingChanges={pendingChanges} onProposed={onCorrectionChanged} />
           <CorrectableExtractionField label="Work type" fieldKey="work_type" value={job.work_type}
-            jobNumber={job.job_number} pendingChanges={pendingChanges} onProposed={onCorrectionChanged} />
+            jobNumber={job.job_number} messageId={job.message_id} pendingChanges={pendingChanges} onProposed={onCorrectionChanged} />
           <CorrectableExtractionField label="Booking window" fieldKey="booking_window" value={job.booking_window}
-            jobNumber={job.job_number} pendingChanges={pendingChanges} onProposed={onCorrectionChanged} />
+            jobNumber={job.job_number} messageId={job.message_id} pendingChanges={pendingChanges} onProposed={onCorrectionChanged} />
           {job.traffic_note && (
             <div className="col-span-2 rounded-sm px-2 py-1.5" style={{ background: "var(--accent-tint)", border: "1px solid var(--accent)" }}>
               <div className="text-[9px] font-bold uppercase tracking-widest" style={{ color: "var(--accent)" }}>Traffic note</div>
@@ -600,14 +680,15 @@ function ManifestDetail({
   const pendingJobs = useMemo(() => manifest.jobs.filter((j) => !j.review_action), [manifest]);
   // Per-job selected action, defaulting to the system's own suggestion.
   // "Review" jobs (chain-reply emails, no confident suggestion) default to
-  // Ignore instead — there's no safe action to auto-accept for those, a
-  // reviewer has to look closer and pick deliberately. A reviewer can
-  // override any job to any of the 4 actions via ActionPicker, regardless
-  // of what was suggested — the previous checkbox-only model could only
-  // accept-the-suggestion or force Ignore, with no way to rescue a job the
-  // classifier wrongly suggested Ignore, or redirect one to Cancel.
+  // Add instead — there's no safe "do nothing" action anymore (Ignore was
+  // removed, see lib/db.ts's ManifestAction docstring), and defaulting to
+  // "skip this silently" is exactly the class of bug this whole session has
+  // been fixing elsewhere (a real order getting missed). Worst case with an
+  // Add default is one extra reviewer click to Cancel instead. A reviewer
+  // can override any job to either action via ActionPicker regardless of
+  // what was suggested.
   function defaultAction(job: ManifestJob): ManifestAction {
-    return job.suggested_action && job.suggested_action !== "Review" ? job.suggested_action : "Ignore";
+    return job.suggested_action && job.suggested_action !== "Review" ? job.suggested_action : "Add";
   }
   const [selectedActions, setSelectedActions] = useState<Record<string, ManifestAction>>(
     () => Object.fromEntries(pendingJobs.map((j) => [j.job_number, defaultAction(j)]))
@@ -713,15 +794,14 @@ function ManifestDetail({
     if (pendingJobs.length === 0) return;
     const blocked = pendingJobs.filter((job) => {
       const action = selectedActions[job.job_number] ?? defaultAction(job);
-      return (action === "Add" || action === "Update") && unresolvedCorrections(job).length > 0;
+      return action === "Add" && unresolvedCorrections(job).length > 0;
     });
     if (blocked.length > 0) {
       // No discard/reject action exists yet for a proposed correction - only
       // apply. So the only way past this today is Apply, or switch the job's
-      // action to Cancel/Ignore. Don't imply a "discard" option that isn't
-      // there.
+      // action to Cancel. Don't imply a "discard" option that isn't there.
       setError(
-        `Apply the proposed correction(s) on job ${blocked.map((j) => j.job_number).join(", ")} before processing as Add/Update - otherwise the RPA would fill in the old, uncorrected values.`
+        `Apply the proposed correction(s) on job ${blocked.map((j) => j.job_number).join(", ")} before processing as Add - otherwise the RPA would fill in the old, uncorrected values.`
       );
       return;
     }
@@ -734,7 +814,7 @@ function ManifestDetail({
         const res = await fetch("/api/manifests/action", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ job_number: job.job_number, action, source }),
+          body: JSON.stringify({ job_number: job.job_number, message_id: job.message_id, action, source }),
         });
         const data = await res.json();
         if (!res.ok || !data.ok) throw new Error(data.error ?? `Failed to save ${job.job_number}`);
@@ -828,12 +908,15 @@ function ManifestDetail({
                 both hedged on the reasoning that "Process" would overstate what clicking it
                 does. That stopped being true the very next day (commit 18ac127, 2026-08-20,
                 firmin/agent.py's run_pending_client_portal_rpa): any job saved here with
-                action Add or Update is picked up by the live poll loop within ~60s and run
-                through the real Client Portal RPA (fills the form, screenshots, does not
-                submit). Renamed to "Process N orders" 2026-08-30 (George: most legible
-                wording for admin staff) — Cancel/Ignore still trigger nothing, those remain
-                a human's job in Proteo. The helper text below reflects this now; don't let
-                it drift out of sync with agent.py again. */}
+                action Add is picked up by the live poll loop within ~60s and run through
+                the real Client Portal RPA (fills the form, screenshots, does not submit).
+                Renamed to "Process N orders" 2026-08-30 (George: most legible wording for
+                admin staff). Update and Ignore removed 2026-08-31 (George: no order-
+                amendment path into Proteo exists, so Update never meant anything; Ignore's
+                job — "skip, already handled" — is now the seen-before badge, not a
+                separate action) — Cancel still triggers nothing, that remains a human's
+                job in Proteo. The helper text below reflects this now; don't let it drift
+                out of sync with agent.py again. */}
             <button
               onClick={handleProcess}
               disabled={processing || pendingJobs.length === 0}
@@ -847,9 +930,9 @@ function ManifestDetail({
                   : `Process ${pendingJobs.length} order${pendingJobs.length === 1 ? "" : "s"}`}
             </button>
             <div className="text-[10px] mt-1.5 leading-snug text-center" style={{ color: "var(--label)" }}>
-              Records your decision on each order. Add/Update jobs trigger the Client Portal RPA
-              automatically (fills the form, screenshot only — never submits). Cancel/Ignore
-              still need applying by hand in Proteo.
+              Records your decision on each order. Add jobs trigger the Client Portal RPA
+              automatically (fills the form, screenshot only — never submits). Cancel
+              still needs applying by hand in Proteo.
             </div>
           </div>
         </div>
@@ -1105,7 +1188,11 @@ export default function Page() {
       if (m.message_id !== messageId) return m;
       return {
         ...m,
-        jobs: m.jobs.map((j) => (j.review_action ? j : { ...j, review_action: "Ignore" as ManifestAction })),
+        // Optimistic placeholder only — the real value lands from the
+        // refetch below. Add, not a "did nothing" default: there's no safe
+        // silent-skip action anymore (Ignore was removed), and this is
+        // overwritten within moments anyway.
+        jobs: m.jobs.map((j) => (j.review_action ? j : { ...j, review_action: "Add" as ManifestAction })),
       };
     }));
     // Re-fetch to pick up the real actions/timestamps written server-side.

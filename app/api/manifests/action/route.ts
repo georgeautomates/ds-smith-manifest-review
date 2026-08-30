@@ -2,15 +2,18 @@ import { NextRequest, NextResponse } from "next/server";
 import { saveManifestAction, type ManifestAction } from "@/lib/db";
 import { getVerifiedReviewerEmail } from "@/lib/identity";
 
-const VALID_ACTIONS: ManifestAction[] = ["Add", "Update", "Cancel", "Ignore"];
+const VALID_ACTIONS: ManifestAction[] = ["Add", "Cancel"];
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { job_number, action, source, reviewed_by } = body ?? {};
+    const { job_number, message_id, action, source, reviewed_by } = body ?? {};
 
     if (!job_number || typeof job_number !== "string") {
       return NextResponse.json({ ok: false, error: "job_number is required" }, { status: 400 });
+    }
+    if (!message_id || typeof message_id !== "string") {
+      return NextResponse.json({ ok: false, error: "message_id is required" }, { status: 400 });
     }
     if (!VALID_ACTIONS.includes(action)) {
       return NextResponse.json({ ok: false, error: `action must be one of ${VALID_ACTIONS.join(", ")}` }, { status: 400 });
@@ -26,6 +29,7 @@ export async function POST(req: NextRequest) {
 
     await saveManifestAction({
       job_number,
+      message_id,
       action,
       source,
       reviewed_by: reviewedBy,
