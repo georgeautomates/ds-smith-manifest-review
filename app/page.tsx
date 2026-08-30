@@ -541,13 +541,15 @@ function OrderCheckRow({
           ) : (
             <ActionPicker job={job} selected={selectedAction} onSelect={onSelectAction} />
           )}
-          {/* The reason, not just the verdict. When the extracted data differs from
-              what's on file, this carries the actual field-level diff
+          {/* Only shown when the extracted data genuinely differs from what's on
+              file — that reason carries the actual field-level diff
               ("delivery_date: 17/08/2026 -> 18/08/2026"), which is the only place
-              the OLD value exists — the row itself already shows the new one. The
-              Client Portal RPA has no update-in-place path, so applying a change
-              from a resend is still a human job at Add time. */}
-          {job.suggested_reason && (
+              the OLD value exists (the row itself already shows the new one), so
+              it's real information, not clutter. Every other reason
+              ("already on file, no change", "never actually entered via RPA") is
+              always Add anyway now — repeating that on every card added nothing,
+              so those are no longer shown at all. */}
+          {job.suggested_reason.includes("differs on:") && (
             <div className="text-[10px] mt-0.5 leading-snug" style={{ color: "var(--ink-soft)" }}>
               {job.suggested_reason}
             </div>
