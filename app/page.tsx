@@ -82,13 +82,21 @@ function ManifestRow({ manifest, active, onClick }: { manifest: Manifest; active
         borderLeft: `3px solid ${active ? "var(--accent)" : "transparent"}`,
       }}
     >
+      {/* Job numbers are the bold/primary line, subject the smaller one below it -
+          the reverse of how this used to read. Many DS Smith subjects repeat
+          identically across several genuinely distinct emails (confirmed live
+          2026-08-30: one 8-manifest run all titled "FW: firmins bristol by 2pm
+          fibre for tuesday", same received timestamp, same thread - a real mail-
+          transport quirk on DS Smith's side, not a dedup bug here), so leading
+          with the subject made a whole run of rows look like duplicates. Job
+          numbers are what's actually unique per row; scan by those instead. */}
       <div className="flex items-center justify-between gap-2">
-        <span className="text-sm font-semibold truncate" style={{ color: "var(--ink)" }}>
-          {manifest.subject || "No subject"}
+        <span className="text-sm font-semibold tabular truncate" style={{ color: "var(--ink)" }}>
+          {shown}{extra}
         </span>
       </div>
-      <div className="text-[10px] tabular truncate" style={{ color: "var(--label)" }}>
-        {shown}{extra}
+      <div className="text-[10px] truncate" style={{ color: "var(--label)" }}>
+        {manifest.subject || "No subject"}
       </div>
       <div className="flex items-center justify-between gap-2">
         <span className="text-[11px] tabular" style={{ color: "var(--label)" }}>{fmtDateTime(manifest.email_received_at)}</span>
