@@ -487,6 +487,8 @@ function OrderCheckRow({
   onToggleExpand,
   pendingChanges,
   onCorrectionChanged,
+  included,
+  onToggleIncluded,
 }: {
   job: ManifestJob;
   selectedAction: ManifestAction;
@@ -495,10 +497,28 @@ function OrderCheckRow({
   onToggleExpand: () => void;
   pendingChanges: PendingChange[];
   onCorrectionChanged: () => void;
+  included: boolean;
+  onToggleIncluded: () => void;
 }) {
   return (
-    <div style={{ borderBottom: "1px solid var(--rule)" }}>
+    <div style={{ borderBottom: "1px solid var(--rule)", opacity: job.review_action || included ? 1 : 0.55 }}>
       <div className="flex items-start gap-2.5 px-3 py-2.5">
+        {/* Same reasoning as the picker-vs-badge split below: a decided job's
+            checkbox would look interactive but do nothing (it already has a
+            review_action, handleProcess only ever iterates pendingJobs), so
+            it's just blank space here instead of a misleading control. */}
+        {job.review_action ? (
+          <div className="w-[13px] shrink-0" />
+        ) : (
+          <input
+            type="checkbox"
+            checked={included}
+            onChange={onToggleIncluded}
+            onClick={(e) => e.stopPropagation()}
+            className="mt-0.5 shrink-0 cursor-pointer"
+            title={included ? "Included in this Process click — uncheck to leave it for later" : "Left for later — won't be processed this click"}
+          />
+        )}
         <div className="min-w-0 flex-1">
           <span className="tabular text-sm font-semibold" style={{ color: "var(--ink)" }}>{job.job_number}</span>
           <div className="text-[11px] truncate" style={{ color: "var(--label)" }}>
@@ -731,6 +751,17 @@ function ManifestDetail({
   const [selectedActions, setSelectedActions] = useState<Record<string, ManifestAction>>(
     () => Object.fromEntries(pendingJobs.map((j) => [j.job_number, defaultAction(j)]))
   );
+  // Which pending jobs are actually included in the NEXT click of Process.
+  // Defaults to everyone, so a reviewer who wants today's old all-at-once
+  // behavior gets it with zero extra clicks — this is purely an opt-OUT.
+  // A booking form can carry 40+ jobs; forcing every one of them to be
+  // decided in a single click (the previous behavior) meant a reviewer
+  // unsure about a few had to guess or block on the whole email. Unchecking
+  // a job here just leaves it pending (no review_action written) — it shows
+  // up again, completely unchanged, next time this manifest is opened.
+  const [includedJobs, setIncludedJobs] = useState<Set<string>>(
+    () => new Set(pendingJobs.map((j) => j.job_number))
+  );
   const [expandedJob, setExpandedJob] = useState<string | null>(null);
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState("");
@@ -782,6 +813,7 @@ function ManifestDetail({
 
   useEffect(() => {
     setSelectedActions(Object.fromEntries(pendingJobs.map((j) => [j.job_number, defaultAction(j)])));
+    setIncludedJobs(new Set(pendingJobs.map((j) => j.job_number)));
   }, [manifest.message_id, pendingJobs]);
 
   useEffect(() => {
@@ -798,6 +830,15 @@ function ManifestDetail({
 
   function selectAction(jobNumber: string, action: ManifestAction) {
     setSelectedActions((prev) => ({ ...prev, [jobNumber]: action }));
+  }
+
+  function toggleIncluded(jobNumber: string) {
+    setIncludedJobs((prev) => {
+      const next = new Set(prev);
+      if (next.has(jobNumber)) next.delete(jobNumber);
+      else next.add(jobNumber);
+      return next;
+    });
   }
 
   function onDragStart(e: React.PointerEvent) {
@@ -828,9 +869,18 @@ function ManifestDetail({
     return jobPendingChanges(job).filter((c) => c.source === "human_correction" && !c.applied_at);
   }
 
+  // Only the jobs the reviewer left checked. A deselected job is left
+  // exactly as it was - no write happens for it at all, so it keeps showing
+  // up as pending (same as a job on a brand-new email) until someone comes
+  // back and actions it, on this visit or a later one.
+  const jobsToProcess = useMemo(
+    () => pendingJobs.filter((j) => includedJobs.has(j.job_number)),
+    [pendingJobs, includedJobs]
+  );
+
   async function handleProcess() {
-    if (pendingJobs.length === 0) return;
-    const blocked = pendingJobs.filter((job) => {
+    if (jobsToProcess.length === 0) return;
+    const blocked = jobsToProcess.filter((job) => {
       const action = selectedActions[job.job_number] ?? defaultAction(job);
       return action === "Add" && unresolvedCorrections(job).length > 0;
     });
@@ -846,7 +896,7 @@ function ManifestDetail({
     setProcessing(true);
     setError("");
     try {
-      for (const job of pendingJobs) {
+      for (const job of jobsToProcess) {
         const action: ManifestAction = selectedActions[job.job_number] ?? defaultAction(job);
         const source: "suggested" | "override" = job.suggested_action === action ? "suggested" : "override";
         const res = await fetch("/api/manifests/action", {
@@ -857,7 +907,7 @@ function ManifestDetail({
         const data = await res.json();
         if (!res.ok || !data.ok) throw new Error(data.error ?? `Failed to save ${job.job_number}`);
       }
-      onProcessed(manifest.message_id, pendingJobs.map((j) => j.job_number));
+      onProcessed(manifest.message_id, jobsToProcess.map((j) => j.job_number));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to process");
     } finally {
@@ -929,6 +979,8 @@ function ManifestDetail({
                   onToggleExpand={() => setExpandedJob((prev) => (prev === row.job_number ? null : row.job_number))}
                   pendingChanges={jobPendingChanges(row.job)}
                   onCorrectionChanged={() => refetchPendingChanges(row.job_number)}
+                  included={includedJobs.has(row.job_number)}
+                  onToggleIncluded={() => toggleIncluded(row.job_number)}
                 />
               ) : (
                 <OtherJobRow
@@ -958,7 +1010,7 @@ function ManifestDetail({
                 out of sync with agent.py again. */}
             <button
               onClick={handleProcess}
-              disabled={processing || pendingJobs.length === 0}
+              disabled={processing || jobsToProcess.length === 0}
               className="w-full py-2.5 rounded-sm font-bold text-sm transition-colors disabled:opacity-40"
               style={{ background: "var(--accent)", color: "var(--accent-ink)" }}
             >
@@ -966,12 +1018,15 @@ function ManifestDetail({
                 ? "Processing…"
                 : pendingJobs.length === 0
                   ? "All orders processed"
-                  : `Process ${pendingJobs.length} order${pendingJobs.length === 1 ? "" : "s"}`}
+                  : jobsToProcess.length === pendingJobs.length
+                    ? `Process ${pendingJobs.length} order${pendingJobs.length === 1 ? "" : "s"}`
+                    : `Process ${jobsToProcess.length} of ${pendingJobs.length} selected`}
             </button>
             <div className="text-[10px] mt-1.5 leading-snug text-center" style={{ color: "var(--label)" }}>
-              Records your decision on each order. Add jobs trigger the Client Portal RPA
-              automatically (fills the form, screenshot only — never submits). Cancel
-              still needs applying by hand in Proteo.
+              Records your decision on each checked order. Add jobs trigger the Client
+              Portal RPA automatically (fills the form, screenshot only — never submits).
+              Cancel still needs applying by hand in Proteo. Uncheck an order to leave it
+              pending for later — it stays exactly as-is until someone actions it.
             </div>
           </div>
         </div>
@@ -1237,6 +1292,7 @@ export default function Page() {
   }
 
   function handleProcessed(messageId: string, jobNumbers: string[]) {
+    const processedSet = new Set(jobNumbers);
     setManifests((prev) => prev.map((m) => {
       if (m.message_id !== messageId) return m;
       return {
@@ -1244,8 +1300,11 @@ export default function Page() {
         // Optimistic placeholder only — the real value lands from the
         // refetch below. Add, not a "did nothing" default: there's no safe
         // silent-skip action anymore (Ignore was removed), and this is
-        // overwritten within moments anyway.
-        jobs: m.jobs.map((j) => (j.review_action ? j : { ...j, review_action: "Add" as ManifestAction })),
+        // overwritten within moments anyway. Only jobNumbers actually just
+        // got a review_action written — a job left unchecked in this batch
+        // (see ManifestDetail's includedJobs) must stay untouched here too,
+        // or it would flash as "processed: Add" until the refetch corrects it.
+        jobs: m.jobs.map((j) => (j.review_action || !processedSet.has(j.job_number) ? j : { ...j, review_action: "Add" as ManifestAction })),
       };
     }));
     // Re-fetch to pick up the real actions/timestamps written server-side.
