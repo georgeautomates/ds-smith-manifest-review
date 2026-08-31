@@ -20,6 +20,12 @@ function getPool(): Pool {
 // there's no order-amendment path into Proteo from here, and "seen before"
 // is now shown directly via a badge (see getJobOccurrences) rather than a
 // suggested_action value silently steering a reviewer away from an order.
+//
+// "Cancel" is displayed to reviewers as "Ignore" (app/page.tsx's
+// ACTION_LABEL, added 2026-09-01 per George) — the button only records a
+// decision here, it doesn't touch Proteo, so "Cancel" read as if the system
+// cancelled the order. This string value stays "Cancel" everywhere it's
+// stored/queried (RPA pickup, SQA, existing rows) — display-only rename.
 export type ManifestAction = "Add" | "Cancel";
 // What the classifier proposes — a superset of ManifestAction. "Review" means
 // the classifier isn't confident enough to suggest a real action (e.g. a

@@ -4,7 +4,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Manifest Review — DS Smith",
-  description: "Triage DS Smith order manifests: Add, Update, Cancel, or Ignore each job.",
+  description: "Triage DS Smith order manifests: Add or Ignore each job.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

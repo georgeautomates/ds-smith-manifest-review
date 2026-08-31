@@ -327,6 +327,17 @@ function CorrectableExtractionField({
 
 const MANIFEST_ACTIONS: ManifestAction[] = ["Add", "Cancel"];
 
+// Display label only — review_action keeps storing "Cancel" everywhere
+// (RPA pickup, SQA, existing rows) so nothing downstream needs a migration.
+// George, 1 Sep: "Cancel" reads as if the system cancels the order; it
+// doesn't — clicking it only ignores the order here and leaves the real
+// cancellation to be done by hand in Proteo, so "Ignore" is the honest word
+// for what this button itself actually does.
+const ACTION_LABEL: Record<ManifestAction, string> = {
+  Add: "Add",
+  Cancel: "Ignore",
+};
+
 // Per-action colour, keyed to this file's existing --add/--cancel CSS
 // variables (already used elsewhere for suggestion badges) so the picker
 // matches whichever theme (light/dark) the page is rendering in. White text
@@ -346,7 +357,7 @@ const ACTION_STYLE: Record<ManifestAction, { bg: string; tint: string; border: s
 // action a reviewer has to choose.
 const ACTION_HINT: Record<ManifestAction, string> = {
   Add: "This order needs entering in the Client Portal — fills it automatically, you still confirm it there. Covers a genuine new order and a repeat that hasn't actually been processed yet.",
-  Cancel: "DS Smith cancelled this order — you cancel it in Proteo by hand, nothing automatic happens here",
+  Cancel: "Marks this order as not to be added here — nothing automatic happens. If DS Smith genuinely cancelled it, you still cancel it in Proteo by hand.",
 };
 
 /**
@@ -389,7 +400,7 @@ function ActionPicker({
                   : { background: "var(--paper)", color: "var(--label)", borderColor: "var(--rule)" }
               }
             >
-              {action}
+              {ACTION_LABEL[action]}
             </button>
           );
         })}
@@ -400,7 +411,7 @@ function ActionPicker({
 
 function occurrenceStatus(o: JobOccurrence): string {
   if (o.rpa_processed) return "processed via RPA";
-  if (o.review_action === "Cancel") return "cancelled";
+  if (o.review_action === "Cancel") return "ignored";
   return "not yet processed";
 }
 
@@ -547,7 +558,7 @@ function OrderCheckRow({
               className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide mt-1 px-1.5 py-0.5 rounded-sm"
               style={{ background: ACTION_STYLE[job.review_action].bg, color: "#FFFFFF" }}
             >
-              ✓ {job.review_action}
+              ✓ {ACTION_LABEL[job.review_action]}
             </div>
           ) : (
             <ActionPicker selected={selectedAction} onSelect={onSelectAction} />
@@ -738,13 +749,14 @@ function ManifestDetail({
   const pendingJobs = useMemo(() => manifest.jobs.filter((j) => !j.review_action), [manifest]);
   // Per-job selected action, defaulting to the system's own suggestion.
   // "Review" jobs (chain-reply emails, no confident suggestion) default to
-  // Add instead — there's no safe "do nothing" action anymore (Ignore was
-  // removed, see lib/db.ts's ManifestAction docstring), and defaulting to
-  // "skip this silently" is exactly the class of bug this whole session has
-  // been fixing elsewhere (a real order getting missed). Worst case with an
-  // Add default is one extra reviewer click to Cancel instead. A reviewer
-  // can override any job to either action via ActionPicker regardless of
-  // what was suggested.
+  // Add instead — there's no safe "do nothing" action anymore (the old
+  // 4-action Ignore was removed, see lib/db.ts's ManifestAction docstring —
+  // unrelated to "Ignore" as the display label for Cancel, ACTION_LABEL
+  // above), and defaulting to "skip this silently" is exactly the class of
+  // bug this whole session has been fixing elsewhere (a real order getting
+  // missed). Worst case with an Add default is one extra reviewer click to
+  // Cancel/Ignore instead. A reviewer can override any job to either action
+  // via ActionPicker regardless of what was suggested.
   function defaultAction(job: ManifestJob): ManifestAction {
     return job.suggested_action && job.suggested_action !== "Review" ? job.suggested_action : "Add";
   }
@@ -1025,8 +1037,9 @@ function ManifestDetail({
             <div className="text-[10px] mt-1.5 leading-snug text-center" style={{ color: "var(--label)" }}>
               Records your decision on each checked order. Add jobs trigger the Client
               Portal RPA automatically (fills the form, screenshot only — never submits).
-              Cancel still needs applying by hand in Proteo. Uncheck an order to leave it
-              pending for later — it stays exactly as-is until someone actions it.
+              Ignore only records your decision here — if DS Smith genuinely cancelled the
+              order, you still need to cancel it in Proteo by hand. Uncheck an order to leave
+              it pending for later — it stays exactly as-is until someone actions it.
             </div>
           </div>
         </div>
