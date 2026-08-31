@@ -540,7 +540,7 @@ function OrderCheckRow({
             <div
               className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide mt-0.5 px-1.5 py-0.5 rounded-sm"
               style={{ background: "var(--cancel-tint)", color: "var(--cancel)" }}
-              title="Reply on an existing thread — not a confident new order or amendment, check manually"
+              title={job.suggested_reason || "Not a confident new order or amendment — check manually"}
             >
               Needs review
             </div>
