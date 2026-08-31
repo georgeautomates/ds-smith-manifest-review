@@ -577,6 +577,75 @@ export async function getRecentRpaRuns(limit = 50): Promise<RpaRunSummary[]> {
   }));
 }
 
+export type UnverifiedAddressRun = {
+  run_at: string;
+  job_number: string;
+  client_name: string;
+  side: "collection" | "delivery";
+  point: string;
+  address_typed: string;
+  postcode: string;
+};
+
+/**
+ * RPA fills where the portal's own location typeahead search found no match,
+ * so the address got typed in from the extracted PDF data instead of a real
+ * portal-verified record (firmin.clients.client_portal's typeahead_hit,
+ * persisted per-run since 2026-08-31 as filled.entered_{side}_verified —
+ * previously this only ever existed as a container log line, gone the
+ * moment the log buffer rotated, so there was no way to tell a verified
+ * fill from a guess after the fact).
+ *
+ * Reviewers never see the RPA screenshot (Drive-only, used for QA/training)
+ * — they check the real portal directly. This is what they should glance at
+ * before/while doing that: which of today's processed orders are worth a
+ * closer look because the address wasn't confirmed against the portal's own
+ * database. Only the most recent run per job/side, since an earlier failed
+ * attempt superseded by a later successful one isn't actionable anymore.
+ */
+export async function getUnverifiedAddressRuns(limit = 100): Promise<UnverifiedAddressRun[]> {
+  const pool = getPool();
+  const { rows } = await pool.query(
+    `WITH latest_runs AS (
+       SELECT DISTINCT ON (job_number) job_number, run_at, client_name, filled
+       FROM rpa_runs
+       WHERE filled IS NOT NULL
+       ORDER BY job_number, run_at DESC
+     )
+     SELECT run_at, job_number, client_name, filled
+     FROM latest_runs
+     WHERE (filled->>'entered_collection_verified') = 'false'
+        OR (filled->>'entered_delivery_verified') = 'false'
+     ORDER BY run_at DESC
+     LIMIT $1`,
+    [limit]
+  );
+  const out: UnverifiedAddressRun[] = [];
+  for (const r of rows) {
+    const filled = r.filled ?? {};
+    const run_at = r.run_at ? String(r.run_at) : "";
+    const job_number = String(r.job_number ?? "");
+    const client_name = String(r.client_name ?? "");
+    if (filled.entered_collection_verified === false) {
+      out.push({
+        run_at, job_number, client_name, side: "collection",
+        point: String(filled.entered_collection_point ?? ""),
+        address_typed: String(filled.entered_collection_address1 ?? ""),
+        postcode: String(filled.entered_collection_postcode ?? ""),
+      });
+    }
+    if (filled.entered_delivery_verified === false) {
+      out.push({
+        run_at, job_number, client_name, side: "delivery",
+        point: String(filled.entered_delivery_point ?? ""),
+        address_typed: String(filled.entered_delivery_address1 ?? ""),
+        postcode: String(filled.entered_delivery_postcode ?? ""),
+      });
+    }
+  }
+  return out;
+}
+
 export type PipelineRunSummary = {
   run_at: string;
   email_subject: string;

@@ -1326,6 +1326,13 @@ export default function Page() {
           <span className="font-bold" style={{ color: "var(--ink)" }}>Manifest Review</span>
         </div>
         <div className="ml-auto flex items-center gap-3 relative">
+          <a
+            href="/needs-portal-check"
+            className="text-xs font-bold uppercase tracking-wide px-3 py-1.5 rounded-sm"
+            style={{ border: "1px solid var(--rule)", color: "var(--ink-soft)" }}
+          >
+            Needs Portal Check
+          </a>
           {isAdminUser && (
             <a
               href="/admin"
