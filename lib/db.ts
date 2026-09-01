@@ -94,6 +94,7 @@ export type ManifestJob = {
   review_action_by: string;
   review_action_at: string;
   pending_changes: PendingChange[];
+  added_elsewhere_message_id: string | null;
 };
 
 export type Manifest = {
@@ -140,6 +141,7 @@ function rowToJob(r: Record<string, any>): ManifestJob {
     review_action_by: String(r.review_action_by ?? ""),
     review_action_at: r.review_action_at ? String(r.review_action_at) : "",
     pending_changes: Array.isArray(r.pending_changes) ? (r.pending_changes as PendingChange[]) : [],
+    added_elsewhere_message_id: r.added_elsewhere_message_id ? String(r.added_elsewhere_message_id) : null,
   };
 }
 
@@ -179,7 +181,10 @@ function buildManifest(msgId: string, jobs: ManifestJob[]): Manifest {
     processed_at: first.processed_at,
     client_group: clientGroup(first.client_name),
     jobs,
-    pending_count: jobs.filter(j => !j.review_action).length,
+    // Locked-elsewhere jobs aren't actionable here, so they shouldn't count
+    // toward "still needs a decision on THIS screen" — same reasoning as
+    // excluding an already-decided job.
+    pending_count: jobs.filter(j => !j.review_action && !j.added_elsewhere_message_id).length,
   };
 }
 
@@ -194,23 +199,45 @@ const HIDDEN_MESSAGE_IDS: string[] = [
 ];
 
 const SELECT_COLS = `
-  job_number, client_name, message_id, processed_at, pdf_url, pdf_job_numbers,
-  collection_point, collection_postcode, delivery_point, delivery_postcode,
-  price, order_number,
-  collection_date, collection_time, delivery_date, delivery_time,
-  work_type, booking_window, traffic_note, composite_score, confidence_status,
-  email_subject, email_received_at, email_body,
-  suggested_action, suggested_reason,
-  review_action, review_action_source, review_action_by, review_action_at,
-  pending_changes
+  o.job_number, o.client_name, o.message_id, o.processed_at, o.pdf_url, o.pdf_job_numbers,
+  o.collection_point, o.collection_postcode, o.delivery_point, o.delivery_postcode,
+  o.price, o.order_number,
+  o.collection_date, o.collection_time, o.delivery_date, o.delivery_time,
+  o.work_type, o.booking_window, o.traffic_note, o.composite_score, o.confidence_status,
+  o.email_subject, o.email_received_at, o.email_body,
+  o.suggested_action, o.suggested_reason,
+  o.review_action, o.review_action_source, o.review_action_by, o.review_action_at,
+  o.pending_changes,
+  added.message_id AS added_elsewhere_message_id
+`;
+
+// Every query below joins this: for a job whose OWN row is still
+// unactioned, find whether a DIFFERENT row (different message_id) for the
+// same job_number already has review_action='Add'. Drives the "locked,
+// already added elsewhere" state in OrderCheckRow — a genuinely different
+// concern from PriorOccurrenceBadge's "seen before" (informational, never
+// blocks). Deliberately scoped to 'Add' only: a prior 'Cancel' doesn't mean
+// the real-world order was ever entered anywhere, so it must stay
+// actionable. Also deliberately NOT the row's own review_action (o.job_number
+// = added.job_number AND o.message_id <> added.message_id enforces "a
+// DIFFERENT occurrence"), and only surfaced when THIS row is itself still
+// unactioned — an already-decided row shows its own status, not this one's.
+const ADDED_ELSEWHERE_JOIN = `
+  LEFT JOIN LATERAL (
+    SELECT message_id FROM st_regis_orders a
+    WHERE a.job_number = o.job_number AND a.message_id <> o.message_id AND a.review_action = 'Add'
+    ORDER BY a.review_action_at ASC NULLS LAST
+    LIMIT 1
+  ) added ON o.review_action = ''
 `;
 
 /** Manifests with at least one job still awaiting a reviewer decision. Most recent first. */
 export async function getPendingManifests(): Promise<Manifest[]> {
   const pool = getPool();
   const { rows } = await pool.query(`
-    SELECT ${SELECT_COLS} FROM st_regis_orders
-    WHERE message_id IN (
+    SELECT ${SELECT_COLS} FROM st_regis_orders o
+    ${ADDED_ELSEWHERE_JOIN}
+    WHERE o.message_id IN (
       SELECT message_id FROM st_regis_orders
       WHERE (client_name ILIKE '%st regis%' OR client_name ILIKE '%ds smith%')
         AND (review_action IS NULL OR review_action = '')
@@ -237,8 +264,9 @@ export async function getPendingManifests(): Promise<Manifest[]> {
 export async function getAllManifests(): Promise<Manifest[]> {
   const pool = getPool();
   const { rows } = await pool.query(`
-    SELECT ${SELECT_COLS} FROM st_regis_orders
-    WHERE client_name ILIKE '%st regis%' OR client_name ILIKE '%ds smith%'
+    SELECT ${SELECT_COLS} FROM st_regis_orders o
+    ${ADDED_ELSEWHERE_JOIN}
+    WHERE o.client_name ILIKE '%st regis%' OR o.client_name ILIKE '%ds smith%'
   `);
 
   const byMessage: Record<string, ManifestJob[]> = {};
@@ -256,7 +284,9 @@ export async function getAllManifests(): Promise<Manifest[]> {
 export async function getManifestByMessageId(messageId: string): Promise<Manifest | null> {
   const pool = getPool();
   const { rows } = await pool.query(
-    `SELECT ${SELECT_COLS} FROM st_regis_orders WHERE message_id = $1 ORDER BY job_number`,
+    `SELECT ${SELECT_COLS} FROM st_regis_orders o
+     ${ADDED_ELSEWHERE_JOIN}
+     WHERE o.message_id = $1 ORDER BY o.job_number`,
     [messageId]
   );
   if (rows.length === 0) return null;

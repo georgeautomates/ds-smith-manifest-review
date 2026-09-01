@@ -500,6 +500,7 @@ function OrderCheckRow({
   onCorrectionChanged,
   included,
   onToggleIncluded,
+  onNavigateToJob,
 }: {
   job: ManifestJob;
   selectedAction: ManifestAction;
@@ -510,15 +511,23 @@ function OrderCheckRow({
   onCorrectionChanged: () => void;
   included: boolean;
   onToggleIncluded: () => void;
+  onNavigateToJob: (jobNumber: string) => void;
 }) {
+  // A DIFFERENT occurrence of this job_number already has review_action='Add'
+  // — locked here too, so staff can't accidentally Add the same real-world
+  // order twice from two different emails. Distinct from job.review_action
+  // (this row's OWN decision) and from PriorOccurrenceBadge ("seen before",
+  // informational only, never blocks) — see ADDED_ELSEWHERE_JOIN in lib/db.ts.
+  const lockedElsewhere = !job.review_action && !!job.added_elsewhere_message_id;
+  const locked = job.review_action || lockedElsewhere;
   return (
-    <div style={{ borderBottom: "1px solid var(--rule)", opacity: job.review_action || included ? 1 : 0.55 }}>
+    <div style={{ borderBottom: "1px solid var(--rule)", opacity: locked || included ? 1 : 0.55 }}>
       <div className="flex items-start gap-2.5 px-3 py-2.5">
-        {/* Same reasoning as the picker-vs-badge split below: a decided job's
-            checkbox would look interactive but do nothing (it already has a
-            review_action, handleProcess only ever iterates pendingJobs), so
-            it's just blank space here instead of a misleading control. */}
-        {job.review_action ? (
+        {/* Same reasoning as the picker-vs-badge split below: a locked job's
+            checkbox would look interactive but do nothing (handleProcess only
+            ever iterates pendingJobs, which excludes locked jobs), so it's
+            just blank space here instead of a misleading control. */}
+        {locked ? (
           <div className="w-[13px] shrink-0" />
         ) : (
           <input
@@ -545,13 +554,14 @@ function OrderCheckRow({
               Needs review
             </div>
           )}
-          {/* A decided job showed the SAME interactive 4-button picker as a still-pending
-              one, with its already-saved action rendered solid-filled — visually identical
-              to a fresh, unsaved selection. Confirmed real 2026-08-26: caused a genuine
-              mistake mid-session (a click on the picker was mistaken for a completed save).
-              Now: decided jobs get a plain, non-interactive status badge instead of the
-              picker at all — re-picking a saved decision does nothing anyway (the picker
-              only ever submits via pendingJobs), so showing it implied an action that
+          {/* A decided/locked job showed the SAME interactive 4-button picker as a
+              still-pending one, with its already-saved action rendered solid-filled —
+              visually identical to a fresh, unsaved selection. Confirmed real
+              2026-08-26: caused a genuine mistake mid-session (a click on the picker
+              was mistaken for a completed save). Now: decided/locked jobs get a
+              plain, non-interactive status badge instead of the picker at all —
+              re-picking does nothing anyway (the picker only ever submits via
+              pendingJobs, which excludes both), so showing it implied an action that
               wasn't really available. */}
           {job.review_action ? (
             <div
@@ -560,6 +570,16 @@ function OrderCheckRow({
             >
               ✓ {ACTION_LABEL[job.review_action]}
             </div>
+          ) : lockedElsewhere ? (
+            <button
+              type="button"
+              onClick={() => onNavigateToJob(job.job_number)}
+              className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide mt-1 px-1.5 py-0.5 rounded-sm cursor-pointer"
+              style={{ background: ACTION_STYLE.Add.bg, color: "#FFFFFF" }}
+              title="Already added from a different email — click to open that manifest"
+            >
+              ✓ Already added elsewhere ↗
+            </button>
           ) : (
             <ActionPicker selected={selectedAction} onSelect={onSelectAction} />
           )}
@@ -746,7 +766,15 @@ function ManifestDetail({
   onProcessed: (messageId: string, jobNumbers: string[]) => void;
   onNavigateToJob: (jobNumber: string) => void;
 }) {
-  const pendingJobs = useMemo(() => manifest.jobs.filter((j) => !j.review_action), [manifest]);
+  // Excludes jobs locked because a DIFFERENT occurrence of this job_number
+  // was already Add'd (added_elsewhere_message_id set) — without this,
+  // jobsToProcess/handleProcess would still submit a locked row, making the
+  // grey-out below purely cosmetic and leaving the actual double-processing
+  // risk (the reason this lock exists) open.
+  const pendingJobs = useMemo(
+    () => manifest.jobs.filter((j) => !j.review_action && !j.added_elsewhere_message_id),
+    [manifest]
+  );
   // Per-job selected action, defaulting to the system's own suggestion.
   // "Review" jobs (chain-reply emails, no confident suggestion) default to
   // Add instead — there's no safe "do nothing" action anymore (the old
@@ -993,6 +1021,7 @@ function ManifestDetail({
                   onCorrectionChanged={() => refetchPendingChanges(row.job_number)}
                   included={includedJobs.has(row.job_number)}
                   onToggleIncluded={() => toggleIncluded(row.job_number)}
+                  onNavigateToJob={onNavigateToJob}
                 />
               ) : (
                 <OtherJobRow
