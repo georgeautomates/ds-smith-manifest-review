@@ -147,6 +147,7 @@ function CorrectableExtractionField({
   fieldKey,
   value,
   sub,
+  hint,
   jobNumber,
   messageId,
   pendingChanges,
@@ -156,6 +157,7 @@ function CorrectableExtractionField({
   fieldKey: CorrectableField;
   value: string;
   sub?: string;
+  hint?: string;
   jobNumber: string;
   messageId: string;
   pendingChanges: PendingChange[];
@@ -262,6 +264,7 @@ function CorrectableExtractionField({
         </div>
       )}
       {sub && <div className="tabular text-[10px]" style={{ color: "var(--label)" }}>{sub}</div>}
+      {hint && <div className="text-[10px] italic" style={{ color: "var(--label)" }}>{hint}</div>}
 
       {fieldChanges.length > 0 && (
         <div className="mt-1 space-y-1">
@@ -619,6 +622,7 @@ function OrderCheckRow({
           <CorrectableExtractionField label="Collection date" fieldKey="collection_date" value={job.collection_date}
             jobNumber={job.job_number} messageId={job.message_id} pendingChanges={pendingChanges} onProposed={onCorrectionChanged} />
           <CorrectableExtractionField label="Collection time" fieldKey="collection_time" value={job.collection_time}
+            hint={job.booking_window ? `Booking window ${job.booking_window} governs collection — this field is ignored` : undefined}
             jobNumber={job.job_number} messageId={job.message_id} pendingChanges={pendingChanges} onProposed={onCorrectionChanged} />
           <CorrectableExtractionField label="Delivery date" fieldKey="delivery_date" value={job.delivery_date}
             jobNumber={job.job_number} messageId={job.message_id} pendingChanges={pendingChanges} onProposed={onCorrectionChanged} />
