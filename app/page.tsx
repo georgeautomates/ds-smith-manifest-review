@@ -881,6 +881,17 @@ function ManifestDetail({
     });
   }
 
+  // Master toggle for the whole checklist. Reviewers picking one or two jobs
+  // out of a large form (e.g. 40+ jobs, only 1-2 need actioning right now)
+  // otherwise had to uncheck every other job individually — this clears
+  // (or restores) all of them in one click. Only ever touches pendingJobs
+  // (locked jobs have no checkbox at all, so they're never affected).
+  const allIncluded = pendingJobs.length > 0 && pendingJobs.every((j) => includedJobs.has(j.job_number));
+  const noneIncluded = includedJobs.size === 0;
+  function toggleAllIncluded() {
+    setIncludedJobs(allIncluded ? new Set() : new Set(pendingJobs.map((j) => j.job_number)));
+  }
+
   function onDragStart(e: React.PointerEvent) {
     // pdfHeight is null until the reviewer's first drag — seed the drag from
     // the panel's actual current (auto-filled) height so the PDF doesn't jump.
@@ -999,13 +1010,25 @@ function ManifestDetail({
 
         {/* Order checklist */}
         <div className="w-80 shrink-0 flex flex-col min-h-0">
-          <div className="shrink-0 px-3 py-2.5" style={{ borderBottom: "1px solid var(--rule)", background: "var(--paper-raised)" }}>
-            <span className="text-[11px] font-bold uppercase tracking-widest" style={{ color: "var(--label)" }}>
-              Order numbers
-            </span>
-            <span className="text-[11px] tabular ml-1.5" style={{ color: "var(--label)" }}>
-              ({rows.length} on this form{otherJobs.length > 0 ? `, ${otherJobs.length} handled elsewhere` : ""})
-            </span>
+          <div className="shrink-0 px-3 py-2.5 flex items-center gap-2" style={{ borderBottom: "1px solid var(--rule)", background: "var(--paper-raised)" }}>
+            {pendingJobs.length > 0 && (
+              <input
+                type="checkbox"
+                checked={allIncluded}
+                ref={(el) => { if (el) el.indeterminate = !allIncluded && !noneIncluded; }}
+                onChange={toggleAllIncluded}
+                className="shrink-0 cursor-pointer"
+                title={allIncluded ? "Deselect all" : "Select all"}
+              />
+            )}
+            <div>
+              <span className="text-[11px] font-bold uppercase tracking-widest" style={{ color: "var(--label)" }}>
+                Order numbers
+              </span>
+              <span className="text-[11px] tabular ml-1.5" style={{ color: "var(--label)" }}>
+                ({rows.length} on this form{otherJobs.length > 0 ? `, ${otherJobs.length} handled elsewhere` : ""})
+              </span>
+            </div>
           </div>
           <div className="flex-1 overflow-y-auto">
             {rows.map((row) =>
