@@ -627,6 +627,11 @@ function OrderCheckRow({
           <CorrectableExtractionField label="Delivery date" fieldKey="delivery_date" value={job.delivery_date}
             jobNumber={job.job_number} messageId={job.message_id} pendingChanges={pendingChanges} onProposed={onCorrectionChanged} />
           <CorrectableExtractionField label="Delivery time" fieldKey="delivery_time" value={job.delivery_time}
+            hint={
+              !job.client_name.toLowerCase().includes("reels")
+                ? "Fibre delivery is always entered as 23:59 in the Client Portal, regardless of what's printed on the form — this is confirmed staff behaviour, not an extraction error"
+                : undefined
+            }
             jobNumber={job.job_number} messageId={job.message_id} pendingChanges={pendingChanges} onProposed={onCorrectionChanged} />
           <CorrectableExtractionField label="Price" fieldKey="price" value={job.price}
             jobNumber={job.job_number} messageId={job.message_id} pendingChanges={pendingChanges} onProposed={onCorrectionChanged} />
