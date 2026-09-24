@@ -231,7 +231,20 @@ const ADDED_ELSEWHERE_JOIN = `
   ) added ON o.review_action = ''
 `;
 
-/** Manifests with at least one job still awaiting a reviewer decision. Most recent first. */
+/**
+ * Manifests with at least one job still awaiting a reviewer decision. Most recent first.
+ *
+ * Originally scoped to `client_name ILIKE '%st regis%' OR '%ds smith%'`
+ * (present since this file's first version) -- the table (and this app) only
+ * ever had St Regis/DS Smith data at the time. Widened 2026-09-24 as part of
+ * onboarding 11 more clients into st_regis_orders (AIM, CCT Worldwide,
+ * Salento already had real rows here but were silently excluded from every
+ * dashboard view by this filter; Hampton Steel/DFDS/GFM/Colombier/Eurocoils/
+ * InContrast/Community Playthings/Unipet/Revolution Beauty/SIG Roofing/
+ * Horizon are the new/repurposed clients this makes visible for the first
+ * time). No replacement filter is needed -- every row in st_regis_orders is
+ * a real order from a configured client, regardless of name.
+ */
 export async function getPendingManifests(): Promise<Manifest[]> {
   const pool = getPool();
   const { rows } = await pool.query(`
@@ -239,8 +252,7 @@ export async function getPendingManifests(): Promise<Manifest[]> {
     ${ADDED_ELSEWHERE_JOIN}
     WHERE o.message_id IN (
       SELECT message_id FROM st_regis_orders
-      WHERE (client_name ILIKE '%st regis%' OR client_name ILIKE '%ds smith%')
-        AND (review_action IS NULL OR review_action = '')
+      WHERE (review_action IS NULL OR review_action = '')
     )
   `);
   // Row order from Postgres is irrelevant here — processed_at/email_received_at
@@ -260,13 +272,15 @@ export async function getPendingManifests(): Promise<Manifest[]> {
     .sort(byMostRecent);
 }
 
-/** All manifests regardless of review state, for the "reviewed" archive view. Most recent first. */
+/**
+ * All manifests regardless of review state, for the "reviewed" archive view. Most recent first.
+ * See getPendingManifests() above for why the client_name filter was removed 2026-09-24.
+ */
 export async function getAllManifests(): Promise<Manifest[]> {
   const pool = getPool();
   const { rows } = await pool.query(`
     SELECT ${SELECT_COLS} FROM st_regis_orders o
     ${ADDED_ELSEWHERE_JOIN}
-    WHERE o.client_name ILIKE '%st regis%' OR o.client_name ILIKE '%ds smith%'
   `);
 
   const byMessage: Record<string, ManifestJob[]> = {};
