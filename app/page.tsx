@@ -75,17 +75,17 @@ function ManifestRow({ manifest, active, onClick }: { manifest: Manifest; active
   // rather than every job on a large manifest, since this is a scan aid,
   // not the full detail (that's in the panel once a row is selected).
   //
-  // Ordered to match the booking form (see the matching comment in
-  // ManifestDetail's `rows`) rather than alphabetically, for the same
-  // reason and using the same pdf_job_numbers-based ordering key.
-  const pdfOrder = manifest.jobs.find((j) => j.pdf_job_numbers.length > 0)?.pdf_job_numbers ?? [];
+  // Ascending NUMERIC order, per Phil's own words twice over: "this is in
+  // no numerical order, is it? [...] 4000,243 is the top one by chance
+  // [...] if you wanted it to follow the exact order [...] that would make
+  // life easier when approving [...] you could just work down your list to
+  // check." His complaint was specifically about numerical order, not
+  // about matching the PDF's own row layout — an earlier pass at this
+  // fix sorted by the PDF's extraction order instead, which is a different
+  // (and unconfirmed) mechanism; corrected to a plain ascending sort on the
+  // numeric job_number.
   const jobNumbers = [...newJobs]
-    .sort((a, b) => {
-      const ai = pdfOrder.indexOf(a.job_number);
-      const bi = pdfOrder.indexOf(b.job_number);
-      const diff = (ai === -1 ? Number.MAX_SAFE_INTEGER : ai) - (bi === -1 ? Number.MAX_SAFE_INTEGER : bi);
-      return diff !== 0 ? diff : a.job_number.localeCompare(b.job_number);
-    })
+    .sort((a, b) => Number(a.job_number) - Number(b.job_number))
     .map((j) => j.job_number);
   const shown = jobNumbers.slice(0, 4).join(", ");
   const extra = jobNumbers.length > 4 ? ` +${jobNumbers.length - 4} more` : "";
@@ -878,35 +878,27 @@ function ManifestDetail({
   // dealt with, exactly what Phil was describing.
   type Row = { job_number: string } & ({ kind: "own"; job: ManifestJob } | { kind: "other"; job: OtherPdfJob });
   const rows: Row[] = useMemo(() => {
-    // Ordered to match the booking form itself, not alphabetically, per
-    // Phil's explicit ask (2026-09-30): "if on the booking form the orders
-    // are 1, 2, 3, [...] it shouldn't go 2, 1, 3 [...] it should go 1, 2, 3
-    // [...] that will also make it a little bit faster for Phil when he's
-    // working through the orders." pdf_job_numbers already preserves the
-    // PDF's real reading order (firmin/clients/pdf.py extracts job numbers
-    // via regex over the raw text top-to-bottom, deduplicated with
-    // dict.fromkeys which keeps first-seen order) and is identical across
-    // every row sharing a message_id, so it's a ready-made ordering key —
-    // no new data needed. A job number missing from that list (shouldn't
-    // normally happen, but pdf_job_numbers is blank on rows ingested before
-    // that column existed) sorts after every known one, alphabetically
-    // among themselves, so nothing silently disappears from the list.
-    const pdfOrder = manifest.jobs.find((j) => j.pdf_job_numbers.length > 0)?.pdf_job_numbers ?? [];
-    const orderIndex = (jobNumber: string): number => {
-      const i = pdfOrder.indexOf(jobNumber);
-      return i === -1 ? Number.MAX_SAFE_INTEGER : i;
-    };
-    const byPdfOrder = (a: { job_number: string }, b: { job_number: string }) => {
-      const diff = orderIndex(a.job_number) - orderIndex(b.job_number);
-      return diff !== 0 ? diff : a.job_number.localeCompare(b.job_number);
-    };
+    // Ascending NUMERIC order, per Phil's own words, twice over ("this is
+    // in no numerical order, is it? [...] 4000,243 is the top one by
+    // chance [...] if you wanted it to follow the exact order [...] that
+    // would make life easier when approving [...] you could just work down
+    // your list to check" — and again, "if on the booking form the orders
+    // are 1, 2, 3, [...] it should go 1, 2, 3"). Both quotes describe
+    // numerical order specifically, not the PDF's own physical row layout
+    // — an earlier pass at this fix sorted by pdf_job_numbers' extraction
+    // order instead (a different, unconfirmed mechanism that happens to
+    // often coincide with ascending order in practice but isn't the same
+    // thing and isn't what was actually asked for); corrected to a plain
+    // ascending numeric sort on job_number.
+    const byJobNumber = (a: { job_number: string }, b: { job_number: string }) =>
+      Number(a.job_number) - Number(b.job_number);
     const own: Row[] = manifest.jobs
       .filter((job) => !job.decided_elsewhere_message_id)
       .map((job) => ({ kind: "own" as const, job, job_number: job.job_number }))
-      .sort(byPdfOrder);
+      .sort(byJobNumber);
     const other: Row[] = otherJobs
       .map((job) => ({ kind: "other" as const, job, job_number: job.job_number }))
-      .sort(byPdfOrder);
+      .sort(byJobNumber);
     return [...own, ...other];
   }, [manifest.jobs, otherJobs]);
   // Jobs hidden from `own` above because a different occurrence already
