@@ -213,24 +213,22 @@ const SELECT_COLS = `
 
 // Every query below joins this: for a job whose OWN row is still
 // unactioned, find whether a DIFFERENT row (different message_id) for the
-// same job_number already has a review_action of EITHER kind (Add or
-// Cancel). Drives the "locked, already decided elsewhere" state in
-// OrderCheckRow — a genuinely different concern from PriorOccurrenceBadge's
-// "seen before" (informational, never blocks).
+// same job_number already has review_action='Add'. Drives the "locked,
+// already decided elsewhere" state in OrderCheckRow — a genuinely different
+// concern from PriorOccurrenceBadge's "seen before" (informational, never
+// blocks).
 //
-// CHANGED 2026-09-30 per Phil's explicit ask (George relayed it): DS Smith
-// resends the same booking form repeatedly, adding new jobs to it each time
-// — e.g. 4 jobs sent, 2 Added and 2 Cancelled, then a follow-up email adds 2
-// more jobs to the same 6-job form. Phil wants the dashboard to show ONLY
-// the 2 genuinely new jobs on that follow-up manifest, not all 6 — "one job
-// number should only ever show on the manifest dashboard screen one time."
-// Previously this join deliberately excluded 'Cancel' (reasoning: a
-// cancelled order was never entered anywhere, so it should stay
-// actionable) — that reasoning was correct in isolation but conflicts with
-// Phil's actual rule: ANY recorded decision, Add or Cancel, means staff are
-// done with that job number and a later resend shouldn't resurface it as if
-// it were new. If a genuinely cancelled job needs revisiting later, that's
-// a deliberate re-open, not an automatic resurface.
+// Deliberately scoped to 'Add' only — confirmed directly in the 2026-09-30
+// George/Phil call transcript, not assumed: "if it's been ignored, then
+// you're just not taking action on it. So it would still show up again
+// next time" / "unless it was rejected [ignored]... but if a job has been
+// PROCESSED from here, that number never shows again." An earlier pass at
+// this same session (based on a partial transcript) widened this to
+// include Cancel too — that was wrong and has been reverted once the full
+// conversation was available: Cancel/Ignore explicitly means "no decision
+// taken," so DS Smith resending that job number must surface it again,
+// exactly as before. Only a genuine Add (a job actually processed) permanently
+// suppresses it.
 //
 // Still deliberately NOT the row's own review_action (o.job_number =
 // added.job_number AND o.message_id <> added.message_id enforces "a
@@ -239,7 +237,7 @@ const SELECT_COLS = `
 const DECIDED_ELSEWHERE_JOIN = `
   LEFT JOIN LATERAL (
     SELECT message_id FROM st_regis_orders a
-    WHERE a.job_number = o.job_number AND a.message_id <> o.message_id AND a.review_action <> ''
+    WHERE a.job_number = o.job_number AND a.message_id <> o.message_id AND a.review_action = 'Add'
     ORDER BY a.review_action_at ASC NULLS LAST
     LIMIT 1
   ) added ON o.review_action = ''
