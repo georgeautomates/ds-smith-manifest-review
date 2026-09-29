@@ -94,7 +94,7 @@ export type ManifestJob = {
   review_action_by: string;
   review_action_at: string;
   pending_changes: PendingChange[];
-  added_elsewhere_message_id: string | null;
+  decided_elsewhere_message_id: string | null;
 };
 
 export type Manifest = {
@@ -141,7 +141,7 @@ function rowToJob(r: Record<string, any>): ManifestJob {
     review_action_by: String(r.review_action_by ?? ""),
     review_action_at: r.review_action_at ? String(r.review_action_at) : "",
     pending_changes: Array.isArray(r.pending_changes) ? (r.pending_changes as PendingChange[]) : [],
-    added_elsewhere_message_id: r.added_elsewhere_message_id ? String(r.added_elsewhere_message_id) : null,
+    decided_elsewhere_message_id: r.added_elsewhere_message_id ? String(r.added_elsewhere_message_id) : null,
   };
 }
 
@@ -181,10 +181,10 @@ function buildManifest(msgId: string, jobs: ManifestJob[]): Manifest {
     processed_at: first.processed_at,
     client_group: clientGroup(first.client_name),
     jobs,
-    // Locked-elsewhere jobs aren't actionable here, so they shouldn't count
+    // Decided-elsewhere jobs aren't actionable here, so they shouldn't count
     // toward "still needs a decision on THIS screen" — same reasoning as
     // excluding an already-decided job.
-    pending_count: jobs.filter(j => !j.review_action && !j.added_elsewhere_message_id).length,
+    pending_count: jobs.filter(j => !j.review_action && !j.decided_elsewhere_message_id).length,
   };
 }
 
@@ -213,19 +213,33 @@ const SELECT_COLS = `
 
 // Every query below joins this: for a job whose OWN row is still
 // unactioned, find whether a DIFFERENT row (different message_id) for the
-// same job_number already has review_action='Add'. Drives the "locked,
-// already added elsewhere" state in OrderCheckRow — a genuinely different
-// concern from PriorOccurrenceBadge's "seen before" (informational, never
-// blocks). Deliberately scoped to 'Add' only: a prior 'Cancel' doesn't mean
-// the real-world order was ever entered anywhere, so it must stay
-// actionable. Also deliberately NOT the row's own review_action (o.job_number
-// = added.job_number AND o.message_id <> added.message_id enforces "a
+// same job_number already has a review_action of EITHER kind (Add or
+// Cancel). Drives the "locked, already decided elsewhere" state in
+// OrderCheckRow — a genuinely different concern from PriorOccurrenceBadge's
+// "seen before" (informational, never blocks).
+//
+// CHANGED 2026-09-30 per Phil's explicit ask (George relayed it): DS Smith
+// resends the same booking form repeatedly, adding new jobs to it each time
+// — e.g. 4 jobs sent, 2 Added and 2 Cancelled, then a follow-up email adds 2
+// more jobs to the same 6-job form. Phil wants the dashboard to show ONLY
+// the 2 genuinely new jobs on that follow-up manifest, not all 6 — "one job
+// number should only ever show on the manifest dashboard screen one time."
+// Previously this join deliberately excluded 'Cancel' (reasoning: a
+// cancelled order was never entered anywhere, so it should stay
+// actionable) — that reasoning was correct in isolation but conflicts with
+// Phil's actual rule: ANY recorded decision, Add or Cancel, means staff are
+// done with that job number and a later resend shouldn't resurface it as if
+// it were new. If a genuinely cancelled job needs revisiting later, that's
+// a deliberate re-open, not an automatic resurface.
+//
+// Still deliberately NOT the row's own review_action (o.job_number =
+// added.job_number AND o.message_id <> added.message_id enforces "a
 // DIFFERENT occurrence"), and only surfaced when THIS row is itself still
 // unactioned — an already-decided row shows its own status, not this one's.
-const ADDED_ELSEWHERE_JOIN = `
+const DECIDED_ELSEWHERE_JOIN = `
   LEFT JOIN LATERAL (
     SELECT message_id FROM st_regis_orders a
-    WHERE a.job_number = o.job_number AND a.message_id <> o.message_id AND a.review_action = 'Add'
+    WHERE a.job_number = o.job_number AND a.message_id <> o.message_id AND a.review_action <> ''
     ORDER BY a.review_action_at ASC NULLS LAST
     LIMIT 1
   ) added ON o.review_action = ''
@@ -236,7 +250,7 @@ export async function getPendingManifests(): Promise<Manifest[]> {
   const pool = getPool();
   const { rows } = await pool.query(`
     SELECT ${SELECT_COLS} FROM st_regis_orders o
-    ${ADDED_ELSEWHERE_JOIN}
+    ${DECIDED_ELSEWHERE_JOIN}
     WHERE o.message_id IN (
       SELECT message_id FROM st_regis_orders
       WHERE (client_name ILIKE '%st regis%' OR client_name ILIKE '%ds smith%')
@@ -265,7 +279,7 @@ export async function getAllManifests(): Promise<Manifest[]> {
   const pool = getPool();
   const { rows } = await pool.query(`
     SELECT ${SELECT_COLS} FROM st_regis_orders o
-    ${ADDED_ELSEWHERE_JOIN}
+    ${DECIDED_ELSEWHERE_JOIN}
     WHERE o.client_name ILIKE '%st regis%' OR o.client_name ILIKE '%ds smith%'
   `);
 
@@ -285,7 +299,7 @@ export async function getManifestByMessageId(messageId: string): Promise<Manifes
   const pool = getPool();
   const { rows } = await pool.query(
     `SELECT ${SELECT_COLS} FROM st_regis_orders o
-     ${ADDED_ELSEWHERE_JOIN}
+     ${DECIDED_ELSEWHERE_JOIN}
      WHERE o.message_id = $1 ORDER BY o.job_number`,
     [messageId]
   );
