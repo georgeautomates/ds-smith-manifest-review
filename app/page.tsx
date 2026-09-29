@@ -58,20 +58,35 @@ function pdfJobCount(m: Manifest): number {
 
 function ManifestRow({ manifest, active, onClick }: { manifest: Manifest; active: boolean; onClick: () => void }) {
   const jobCount = pdfJobCount(manifest);
-  // Per Phil's explicit ask (2026-09-30): a job number that's already been
-  // decided on a DIFFERENT email for the same booking form (Add or Cancel)
-  // is not "new" here, even though this row's own copy is technically still
-  // unactioned in the DB. DS Smith resends the same form repeatedly, adding
-  // jobs each time — without this, a follow-up email with 2 genuinely new
-  // jobs plus 4 already-decided ones would still show all 6, exactly the
-  // clutter Phil asked to remove: "one job number should only ever show on
-  // the manifest dashboard screen one time."
+  // Per the 2026-09-30 George/Phil call: a job number already Added on a
+  // DIFFERENT email for the same booking form is not "new" here, even
+  // though this row's own copy is technically still unactioned in the DB.
+  // DS Smith resends the same form repeatedly, adding jobs each time —
+  // without this, a follow-up email with 2 genuinely new jobs plus 4
+  // already-processed ones would still show all 6. Confirmed in the
+  // transcript this applies ONLY to a genuine Add ("if a job has been
+  // PROCESSED from here, that number never shows again") — an Ignored/
+  // Cancelled job is explicitly NOT suppressed ("it would still show up
+  // again next time"), since Ignore/Cancel means no decision was actually
+  // taken on the real-world order.
   const newJobs = manifest.jobs.filter((j) => !j.decided_elsewhere_message_id);
   // Job numbers weren't shown anywhere in the list — the only way to find a
   // specific job was already knowing which email it arrived on. Truncated
   // rather than every job on a large manifest, since this is a scan aid,
   // not the full detail (that's in the panel once a row is selected).
-  const jobNumbers = newJobs.map((j) => j.job_number);
+  //
+  // Ordered to match the booking form (see the matching comment in
+  // ManifestDetail's `rows`) rather than alphabetically, for the same
+  // reason and using the same pdf_job_numbers-based ordering key.
+  const pdfOrder = manifest.jobs.find((j) => j.pdf_job_numbers.length > 0)?.pdf_job_numbers ?? [];
+  const jobNumbers = [...newJobs]
+    .sort((a, b) => {
+      const ai = pdfOrder.indexOf(a.job_number);
+      const bi = pdfOrder.indexOf(b.job_number);
+      const diff = (ai === -1 ? Number.MAX_SAFE_INTEGER : ai) - (bi === -1 ? Number.MAX_SAFE_INTEGER : bi);
+      return diff !== 0 ? diff : a.job_number.localeCompare(b.job_number);
+    })
+    .map((j) => j.job_number);
   const shown = jobNumbers.slice(0, 4).join(", ");
   const extra = jobNumbers.length > 4 ? ` +${jobNumbers.length - 4} more` : "";
   // "N orders" told a reviewer how big the manifest was, but not how much of
@@ -777,10 +792,10 @@ function ManifestDetail({
   onNavigateToJob: (jobNumber: string) => void;
 }) {
   // Excludes jobs locked because a DIFFERENT occurrence of this job_number
-  // was already decided (decided_elsewhere_message_id set, Add or Cancel) —
-  // without this, jobsToProcess/handleProcess would still submit a locked
-  // row, making the hide-from-list below purely cosmetic and leaving the
-  // actual double-processing risk (the reason this lock exists) open.
+  // was already Added (decided_elsewhere_message_id set) — without this,
+  // jobsToProcess/handleProcess would still submit a locked row, making the
+  // hide-from-list below purely cosmetic and leaving the actual
+  // double-processing risk (the reason this lock exists) open.
   const pendingJobs = useMemo(
     () => manifest.jobs.filter((j) => !j.review_action && !j.decided_elsewhere_message_id),
     [manifest]
@@ -863,13 +878,35 @@ function ManifestDetail({
   // dealt with, exactly what Phil was describing.
   type Row = { job_number: string } & ({ kind: "own"; job: ManifestJob } | { kind: "other"; job: OtherPdfJob });
   const rows: Row[] = useMemo(() => {
+    // Ordered to match the booking form itself, not alphabetically, per
+    // Phil's explicit ask (2026-09-30): "if on the booking form the orders
+    // are 1, 2, 3, [...] it shouldn't go 2, 1, 3 [...] it should go 1, 2, 3
+    // [...] that will also make it a little bit faster for Phil when he's
+    // working through the orders." pdf_job_numbers already preserves the
+    // PDF's real reading order (firmin/clients/pdf.py extracts job numbers
+    // via regex over the raw text top-to-bottom, deduplicated with
+    // dict.fromkeys which keeps first-seen order) and is identical across
+    // every row sharing a message_id, so it's a ready-made ordering key —
+    // no new data needed. A job number missing from that list (shouldn't
+    // normally happen, but pdf_job_numbers is blank on rows ingested before
+    // that column existed) sorts after every known one, alphabetically
+    // among themselves, so nothing silently disappears from the list.
+    const pdfOrder = manifest.jobs.find((j) => j.pdf_job_numbers.length > 0)?.pdf_job_numbers ?? [];
+    const orderIndex = (jobNumber: string): number => {
+      const i = pdfOrder.indexOf(jobNumber);
+      return i === -1 ? Number.MAX_SAFE_INTEGER : i;
+    };
+    const byPdfOrder = (a: { job_number: string }, b: { job_number: string }) => {
+      const diff = orderIndex(a.job_number) - orderIndex(b.job_number);
+      return diff !== 0 ? diff : a.job_number.localeCompare(b.job_number);
+    };
     const own: Row[] = manifest.jobs
       .filter((job) => !job.decided_elsewhere_message_id)
       .map((job) => ({ kind: "own" as const, job, job_number: job.job_number }))
-      .sort((a, b) => a.job_number.localeCompare(b.job_number));
+      .sort(byPdfOrder);
     const other: Row[] = otherJobs
       .map((job) => ({ kind: "other" as const, job, job_number: job.job_number }))
-      .sort((a, b) => a.job_number.localeCompare(b.job_number));
+      .sort(byPdfOrder);
     return [...own, ...other];
   }, [manifest.jobs, otherJobs]);
   // Jobs hidden from `own` above because a different occurrence already
