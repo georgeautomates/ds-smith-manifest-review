@@ -58,19 +58,29 @@ function pdfJobCount(m: Manifest): number {
 
 function ManifestRow({ manifest, active, onClick }: { manifest: Manifest; active: boolean; onClick: () => void }) {
   const jobCount = pdfJobCount(manifest);
+  // Per Phil's explicit ask (2026-09-30): a job number that's already been
+  // decided on a DIFFERENT email for the same booking form (Add or Cancel)
+  // is not "new" here, even though this row's own copy is technically still
+  // unactioned in the DB. DS Smith resends the same form repeatedly, adding
+  // jobs each time — without this, a follow-up email with 2 genuinely new
+  // jobs plus 4 already-decided ones would still show all 6, exactly the
+  // clutter Phil asked to remove: "one job number should only ever show on
+  // the manifest dashboard screen one time."
+  const newJobs = manifest.jobs.filter((j) => !j.decided_elsewhere_message_id);
   // Job numbers weren't shown anywhere in the list — the only way to find a
   // specific job was already knowing which email it arrived on. Truncated
   // rather than every job on a large manifest, since this is a scan aid,
   // not the full detail (that's in the panel once a row is selected).
-  const jobNumbers = manifest.jobs.map((j) => j.job_number);
+  const jobNumbers = newJobs.map((j) => j.job_number);
   const shown = jobNumbers.slice(0, 4).join(", ");
   const extra = jobNumbers.length > 4 ? ` +${jobNumbers.length - 4} more` : "";
   // "N orders" told a reviewer how big the manifest was, but not how much of
   // it they'd actually gotten through — a manifest with 9 of 10 decided
   // looked identical in the list to one nobody had opened yet. Reuses the
   // manifest's own job rows (already fetched, no new query) to count how
-  // many already have a review_action set.
-  const decidedCount = manifest.jobs.filter((j) => j.review_action).length;
+  // many already have a review_action set — decided-elsewhere jobs count as
+  // decided here too, same reasoning as newJobs above.
+  const decidedCount = manifest.jobs.filter((j) => j.review_action || j.decided_elsewhere_message_id).length;
   const allDecided = jobCount > 0 && decidedCount >= jobCount;
   return (
     <button
@@ -503,7 +513,6 @@ function OrderCheckRow({
   onCorrectionChanged,
   included,
   onToggleIncluded,
-  onNavigateToJob,
 }: {
   job: ManifestJob;
   selectedAction: ManifestAction;
@@ -514,15 +523,14 @@ function OrderCheckRow({
   onCorrectionChanged: () => void;
   included: boolean;
   onToggleIncluded: () => void;
-  onNavigateToJob: (jobNumber: string) => void;
 }) {
-  // A DIFFERENT occurrence of this job_number already has review_action='Add'
-  // — locked here too, so staff can't accidentally Add the same real-world
-  // order twice from two different emails. Distinct from job.review_action
-  // (this row's OWN decision) and from PriorOccurrenceBadge ("seen before",
-  // informational only, never blocks) — see ADDED_ELSEWHERE_JOIN in lib/db.ts.
-  const lockedElsewhere = !job.review_action && !!job.added_elsewhere_message_id;
-  const locked = job.review_action || lockedElsewhere;
+  // A job already decided elsewhere (decided_elsewhere_message_id set) never
+  // reaches this component at all — ManifestDetail's `rows` filters those
+  // out of "own" entirely per Phil's ask (see that filter's comment). So the
+  // only way a row here is locked is its own review_action already being
+  // set — distinct from PriorOccurrenceBadge ("seen before", informational
+  // only, never blocks).
+  const locked = !!job.review_action;
   return (
     <div style={{ borderBottom: "1px solid var(--rule)", opacity: locked || included ? 1 : 0.55 }}>
       <div className="flex items-start gap-2.5 px-3 py-2.5">
@@ -561,11 +569,14 @@ function OrderCheckRow({
               still-pending one, with its already-saved action rendered solid-filled —
               visually identical to a fresh, unsaved selection. Confirmed real
               2026-08-26: caused a genuine mistake mid-session (a click on the picker
-              was mistaken for a completed save). Now: decided/locked jobs get a
-              plain, non-interactive status badge instead of the picker at all —
-              re-picking does nothing anyway (the picker only ever submits via
-              pendingJobs, which excludes both), so showing it implied an action that
-              wasn't really available. */}
+              was mistaken for a completed save). Now: a decided job gets a plain,
+              non-interactive status badge instead of the picker at all — re-picking
+              does nothing anyway (the picker only ever submits via pendingJobs, which
+              excludes it), so showing it implied an action that wasn't really
+              available. A job decided on a DIFFERENT occurrence never reaches this
+              component at all (see the `own` filter in ManifestDetail's `rows`), so
+              this only ever needs to handle job.review_action, not a separate
+              "locked elsewhere" case. */}
           {job.review_action ? (
             <div
               className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide mt-1 px-1.5 py-0.5 rounded-sm"
@@ -573,16 +584,6 @@ function OrderCheckRow({
             >
               ✓ {ACTION_LABEL[job.review_action]}
             </div>
-          ) : lockedElsewhere ? (
-            <button
-              type="button"
-              onClick={() => onNavigateToJob(job.job_number)}
-              className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide mt-1 px-1.5 py-0.5 rounded-sm cursor-pointer"
-              style={{ background: ACTION_STYLE.Add.bg, color: "#FFFFFF" }}
-              title="Already added from a different email — click to open that manifest"
-            >
-              ✓ Already added elsewhere ↗
-            </button>
           ) : (
             <ActionPicker selected={selectedAction} onSelect={onSelectAction} />
           )}
@@ -776,12 +777,12 @@ function ManifestDetail({
   onNavigateToJob: (jobNumber: string) => void;
 }) {
   // Excludes jobs locked because a DIFFERENT occurrence of this job_number
-  // was already Add'd (added_elsewhere_message_id set) — without this,
-  // jobsToProcess/handleProcess would still submit a locked row, making the
-  // grey-out below purely cosmetic and leaving the actual double-processing
-  // risk (the reason this lock exists) open.
+  // was already decided (decided_elsewhere_message_id set, Add or Cancel) —
+  // without this, jobsToProcess/handleProcess would still submit a locked
+  // row, making the hide-from-list below purely cosmetic and leaving the
+  // actual double-processing risk (the reason this lock exists) open.
   const pendingJobs = useMemo(
-    () => manifest.jobs.filter((j) => !j.review_action && !j.added_elsewhere_message_id),
+    () => manifest.jobs.filter((j) => !j.review_action && !j.decided_elsewhere_message_id),
     [manifest]
   );
   // Per-job selected action, defaulting to the system's own suggestion.
@@ -849,9 +850,21 @@ function ManifestDetail({
   // among themselves), since those are what the reviewer is actually here to
   // action — other-PDF jobs (read-only, already handled or pending elsewhere)
   // follow after, sorted among themselves too.
+  //
+  // Jobs already decided on a DIFFERENT occurrence of this job_number
+  // (decided_elsewhere_message_id set) are dropped from "own" entirely, per
+  // Phil's explicit ask (2026-09-30): "one job number should only ever show
+  // on the manifest dashboard screen one time." DS Smith resends the same
+  // booking form repeatedly, adding new jobs each time — a follow-up email
+  // with 2 new jobs plus 4 already-decided ones from the original send
+  // should show only the 2 new ones here, not all 6. Previously these were
+  // shown as a locked, greyed-out row instead of hidden — that still let
+  // every resend visually clutter the checklist with jobs staff had already
+  // dealt with, exactly what Phil was describing.
   type Row = { job_number: string } & ({ kind: "own"; job: ManifestJob } | { kind: "other"; job: OtherPdfJob });
   const rows: Row[] = useMemo(() => {
     const own: Row[] = manifest.jobs
+      .filter((job) => !job.decided_elsewhere_message_id)
       .map((job) => ({ kind: "own" as const, job, job_number: job.job_number }))
       .sort((a, b) => a.job_number.localeCompare(b.job_number));
     const other: Row[] = otherJobs
@@ -859,6 +872,12 @@ function ManifestDetail({
       .sort((a, b) => a.job_number.localeCompare(b.job_number));
     return [...own, ...other];
   }, [manifest.jobs, otherJobs]);
+  // Jobs hidden from `own` above because a different occurrence already
+  // decided them — a distinct count from otherJobs (jobs on the PDF that
+  // never got their own row under this message_id at all). Both explain why
+  // "on this form" can read lower than the PDF's real job count, so both are
+  // surfaced in the header rather than only one.
+  const alreadyDecidedCount = manifest.jobs.filter((j) => j.decided_elsewhere_message_id).length;
 
   useEffect(() => {
     setSelectedActions(Object.fromEntries(pendingJobs.map((j) => [j.job_number, defaultAction(j)])));
@@ -1035,7 +1054,9 @@ function ManifestDetail({
                 Order numbers
               </span>
               <span className="text-[11px] tabular ml-1.5" style={{ color: "var(--label)" }}>
-                ({rows.length} on this form{otherJobs.length > 0 ? `, ${otherJobs.length} handled elsewhere` : ""})
+                ({rows.length} new
+                {otherJobs.length > 0 ? `, ${otherJobs.length} handled elsewhere` : ""}
+                {alreadyDecidedCount > 0 ? `, ${alreadyDecidedCount} already decided` : ""})
               </span>
             </div>
           </div>
@@ -1053,7 +1074,6 @@ function ManifestDetail({
                   onCorrectionChanged={() => refetchPendingChanges(row.job_number)}
                   included={includedJobs.has(row.job_number)}
                   onToggleIncluded={() => toggleIncluded(row.job_number)}
-                  onNavigateToJob={onNavigateToJob}
                 />
               ) : (
                 <OtherJobRow
