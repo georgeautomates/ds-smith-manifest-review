@@ -10,9 +10,20 @@ import type { PDFDocumentProxy, RenderTask } from "pdfjs-dist";
 // shape of this dashboard's booking-form pane) always show black bars with
 // that viewer. Rendering the PDF ourselves is the only way to actually fill
 // the panel width edge-to-edge with no padding.
-function driveFileId(url: string): string | null {
-  const m = url.match(/\/file\/d\/([\w-]+)/);
-  return m ? m[1] : null;
+//
+// pdf_url can point at either backend during the 2026-09-30 Drive->Blob
+// migration: historic rows get backfilled to Blob, but a row written by an
+// agent revision mid-rollout, or one the backfill hasn't reached yet, can
+// still carry a real drive.google.com link. /api/pdf-proxy is built to
+// accept either source id, so this just needs to recognise which kind of
+// URL it's looking at and extract the right identifier.
+type PdfSource = { kind: "drive"; id: string } | { kind: "blob"; url: string };
+
+function pdfSource(url: string): PdfSource | null {
+  const driveMatch = url.match(/\/file\/d\/([\w-]+)/);
+  if (driveMatch) return { kind: "drive", id: driveMatch[1] };
+  if (/^https:\/\/[\w-]+\.blob\.core\.windows\.net\//.test(url)) return { kind: "blob", url };
+  return null;
 }
 
 export function PdfViewer({ pdfUrl }: { pdfUrl: string }) {
@@ -25,7 +36,7 @@ export function PdfViewer({ pdfUrl }: { pdfUrl: string }) {
   const [error, setError] = useState("");
   const [width, setWidth] = useState(0);
 
-  const fileId = driveFileId(pdfUrl);
+  const source = pdfSource(pdfUrl);
 
   // Track the panel's actual rendered width so pages re-render at the right
   // scale when the reviewer drags the resize handle.
@@ -40,13 +51,14 @@ export function PdfViewer({ pdfUrl }: { pdfUrl: string }) {
     return () => ro.disconnect();
   }, []);
 
-  // Keyed on fileId, not the whole pdfUrl, so switching between manifests
-  // that share the same underlying attachment (common - DS Smith often
-  // sends one PDF covering many jobs/manifests) doesn't re-fetch or reset
-  // the page the reviewer is on.
+  // Keyed on the source's own identifier, not the whole pdfUrl, so switching
+  // between manifests that share the same underlying attachment (common -
+  // DS Smith often sends one PDF covering many jobs/manifests) doesn't
+  // re-fetch or reset the page the reviewer is on.
+  const sourceKey = source ? (source.kind === "drive" ? source.id : source.url) : "";
   useEffect(() => {
-    if (!fileId) {
-      setError("Couldn't read this PDF's Drive file id");
+    if (!source) {
+      setError("Couldn't read this PDF's file location");
       setDoc(null);
       return;
     }
@@ -61,7 +73,11 @@ export function PdfViewer({ pdfUrl }: { pdfUrl: string }) {
           "pdfjs-dist/build/pdf.worker.min.mjs",
           import.meta.url
         ).toString();
-        const loaded = await pdfjs.getDocument({ url: `/api/pdf-proxy?id=${encodeURIComponent(fileId)}` }).promise;
+        const proxyUrl =
+          source.kind === "drive"
+            ? `/api/pdf-proxy?id=${encodeURIComponent(source.id)}`
+            : `/api/pdf-proxy?url=${encodeURIComponent(source.url)}`;
+        const loaded = await pdfjs.getDocument({ url: proxyUrl }).promise;
         if (cancelled) return;
         setDoc(loaded);
         setNumPages(loaded.numPages);
@@ -70,7 +86,7 @@ export function PdfViewer({ pdfUrl }: { pdfUrl: string }) {
       }
     })();
     return () => { cancelled = true; };
-  }, [fileId]);
+  }, [source, sourceKey]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
