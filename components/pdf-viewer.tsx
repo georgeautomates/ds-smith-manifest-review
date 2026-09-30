@@ -86,7 +86,17 @@ export function PdfViewer({ pdfUrl }: { pdfUrl: string }) {
       }
     })();
     return () => { cancelled = true; };
-  }, [source, sourceKey]);
+    // Deliberately NOT depending on `source` itself — pdfSource(pdfUrl)
+    // returns a brand-new object literal every render, so including the
+    // object reference here re-ran this effect (wiping and re-fetching the
+    // PDF) on every single re-render of this component, not just when the
+    // real underlying PDF changed. Confirmed live 2026-09-30: this caused a
+    // visible flicker as the viewer kept clearing and reloading itself.
+    // sourceKey is the derived, stable primitive that actually identifies
+    // which PDF this is — same role fileId's plain string played before the
+    // Drive/Blob refactor introduced this bug.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourceKey]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
