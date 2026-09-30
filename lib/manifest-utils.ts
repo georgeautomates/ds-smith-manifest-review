@@ -9,7 +9,14 @@
 // with "Module not found: Can't resolve 'tls'" the moment `recencyTimestamp`
 // was imported from lib/db.ts client-side.
 
-import type { Manifest } from "./db";
+// Structural type, not `import type { Manifest }` — this needs to accept
+// EITHER a Manifest or a bare ManifestJob (both carry these same two
+// fields), e.g. lib/db.ts's markSupersededOccurrences() calls this directly
+// on individual job rows, not just assembled manifests. A type-only import
+// of ManifestJob from db.ts would be fine at compile time, but keeping this
+// file's only coupling to db.ts structural (not a named import) avoids ever
+// having to reason about it again if db.ts's exports change shape.
+type HasRecencyFields = { email_received_at: string; processed_at: string };
 
 /**
  * processed_at / email_received_at are stored as free-text (not a real
@@ -20,7 +27,7 @@ import type { Manifest } from "./db";
  * actually sent the manifest) over processed_at (when our pipeline happened
  * to write the row) since that's the more meaningful "recency" for a reviewer.
  */
-export function recencyTimestamp(m: Manifest): number {
+export function recencyTimestamp(m: HasRecencyFields): number {
   const received = m.email_received_at ? Date.parse(m.email_received_at) : NaN;
   if (!Number.isNaN(received)) return received;
   const processed = m.processed_at ? Date.parse(m.processed_at) : NaN;

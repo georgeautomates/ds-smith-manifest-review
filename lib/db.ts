@@ -94,7 +94,13 @@ export type ManifestJob = {
   review_action_by: string;
   review_action_at: string;
   pending_changes: PendingChange[];
-  decided_elsewhere_message_id: string | null;
+  // Points at the message_id of the EARLIEST email this job_number ever
+  // appeared on, when that's a DIFFERENT message than this row's own — i.e.
+  // this row is a later, superseded resend. Null when this row IS the
+  // earliest occurrence (or the only one). See markSupersededOccurrences()
+  // for the real rule and why it replaced the old Add-only "decided
+  // elsewhere" check.
+  superseded_by_earlier_message_id: string | null;
 };
 
 export type Manifest = {
@@ -141,7 +147,7 @@ function rowToJob(r: Record<string, any>): ManifestJob {
     review_action_by: String(r.review_action_by ?? ""),
     review_action_at: r.review_action_at ? String(r.review_action_at) : "",
     pending_changes: Array.isArray(r.pending_changes) ? (r.pending_changes as PendingChange[]) : [],
-    decided_elsewhere_message_id: r.added_elsewhere_message_id ? String(r.added_elsewhere_message_id) : null,
+    superseded_by_earlier_message_id: null, // filled in by markSupersededOccurrences() below, once every occurrence is known
   };
 }
 
@@ -173,10 +179,10 @@ function buildManifest(msgId: string, jobs: ManifestJob[]): Manifest {
     processed_at: first.processed_at,
     client_group: clientGroup(first.client_name),
     jobs,
-    // Decided-elsewhere jobs aren't actionable here, so they shouldn't count
-    // toward "still needs a decision on THIS screen" — same reasoning as
-    // excluding an already-decided job.
-    pending_count: jobs.filter(j => !j.review_action && !j.decided_elsewhere_message_id).length,
+    // Superseded jobs aren't actionable here, so they shouldn't count toward
+    // "still needs a decision on THIS screen" — same reasoning as excluding
+    // an already-decided job.
+    pending_count: jobs.filter(j => !j.review_action && !j.superseded_by_earlier_message_id).length,
   };
 }
 
@@ -199,102 +205,113 @@ const SELECT_COLS = `
   o.email_subject, o.email_received_at, o.email_body,
   o.suggested_action, o.suggested_reason,
   o.review_action, o.review_action_source, o.review_action_by, o.review_action_at,
-  o.pending_changes,
-  added.message_id AS added_elsewhere_message_id
+  o.pending_changes
 `;
 
-// Every query below joins this: for a job whose OWN row is still
-// unactioned, find whether a DIFFERENT row (different message_id) for the
-// same job_number already has review_action='Add'. Drives the "locked,
-// already decided elsewhere" state in OrderCheckRow — a genuinely different
-// concern from PriorOccurrenceBadge's "seen before" (informational, never
-// blocks).
-//
-// Deliberately scoped to 'Add' only — confirmed directly in the 2026-09-30
-// George/Phil call transcript, not assumed: "if it's been ignored, then
-// you're just not taking action on it. So it would still show up again
-// next time" / "unless it was rejected [ignored]... but if a job has been
-// PROCESSED from here, that number never shows again." An earlier pass at
-// this same session (based on a partial transcript) widened this to
-// include Cancel too — that was wrong and has been reverted once the full
-// conversation was available: Cancel/Ignore explicitly means "no decision
-// taken," so DS Smith resending that job number must surface it again,
-// exactly as before. Only a genuine Add (a job actually processed) permanently
-// suppresses it.
-//
-// Still deliberately NOT the row's own review_action (o.job_number =
-// added.job_number AND o.message_id <> added.message_id enforces "a
-// DIFFERENT occurrence"), and only surfaced when THIS row is itself still
-// unactioned — an already-decided row shows its own status, not this one's.
-const DECIDED_ELSEWHERE_JOIN = `
-  LEFT JOIN LATERAL (
-    SELECT message_id FROM st_regis_orders a
-    WHERE a.job_number = o.job_number AND a.message_id <> o.message_id AND a.review_action = 'Add'
-    ORDER BY a.review_action_at ASC NULLS LAST
-    LIMIT 1
-  ) added ON o.review_action = ''
-`;
+const CLIENT_FILTER = `o.client_name ILIKE '%st regis%' OR o.client_name ILIKE '%ds smith%'`;
 
-/** Manifests with at least one job still awaiting a reviewer decision. Most recent first. */
-export async function getPendingManifests(): Promise<Manifest[]> {
+/**
+ * For every job_number, finds its single earliest occurrence (by real parsed
+ * recency, NOT the raw text columns — see recencyTimestamp's own comment)
+ * and marks every OTHER occurrence of that job_number as superseded by it.
+ *
+ * Replaces the old Add-only "decided elsewhere" rule 2026-09-30, per direct
+ * confirmation from George (relaying Phil): "regardless of what was decided
+ * or not, only new orders show up in subsequent mails on the right side."
+ * The earlier Add-only rule (see git history on DECIDED_ELSEWHERE_JOIN) was
+ * built from an earlier reading of the original call transcript, which said
+ * an Ignored/undecided job should keep resurfacing — Phil's own real
+ * expectation in practice turned out to be broader: DS Smith resends the
+ * same booking form all day adding a couple of jobs each time, and a
+ * genuinely new job number showing up buried among 20 already-seen ones,
+ * repeated on every subsequent resend, is the exact clutter he was
+ * describing — independent of whether anyone's had a chance to action
+ * anything yet.
+ *
+ * This deliberately means an undecided job can go a full day (or longer)
+ * without ever showing on the Today view if its earliest occurrence was an
+ * earlier day — confirmed acceptable behaviour, not a gap to guard against;
+ * it stays visible and actionable on ITS earliest occurrence, just not
+ * necessarily on today's default filter. Staff use "All dates" to find it.
+ *
+ * Uses the FULL row set (every occurrence of every job_number in scope,
+ * regardless of which specific manifest a caller is ultimately displaying)
+ * because "earliest occurrence" is only a correct question with full
+ * visibility — computing it from a partial/filtered row set would wrongly
+ * treat a later occurrence as "earliest" whenever its true earliest
+ * occurrence fell outside that filter (e.g. Today).
+ */
+function markSupersededOccurrences(jobs: ManifestJob[]): void {
+  const byJobNumber = new Map<string, ManifestJob[]>();
+  for (const j of jobs) {
+    if (!byJobNumber.has(j.job_number)) byJobNumber.set(j.job_number, []);
+    byJobNumber.get(j.job_number)!.push(j);
+  }
+  for (const occurrences of byJobNumber.values()) {
+    if (occurrences.length < 2) continue;
+    // Earliest by real recency, message_id as a stable tiebreaker for two
+    // rows sharing an identical timestamp (seen with same-second bulk
+    // ingests) so this is deterministic run to run.
+    const sorted = [...occurrences].sort((a, b) => {
+      const diff = recencyTimestamp(a) - recencyTimestamp(b);
+      return diff !== 0 ? diff : a.message_id.localeCompare(b.message_id);
+    });
+    const earliest = sorted[0];
+    for (const occ of sorted.slice(1)) {
+      occ.superseded_by_earlier_message_id = earliest.message_id;
+    }
+  }
+}
+
+/**
+ * Fetches every St Regis/DS Smith row and marks superseded occurrences
+ * across the FULL table — the shared source both getPendingManifests() and
+ * getManifestByMessageId() filter down from, so "earliest occurrence" is
+ * always computed with full visibility (see markSupersededOccurrences()).
+ */
+async function fetchAllJobsWithSupersession(): Promise<ManifestJob[]> {
   const pool = getPool();
   const { rows } = await pool.query(`
     SELECT ${SELECT_COLS} FROM st_regis_orders o
-    ${DECIDED_ELSEWHERE_JOIN}
-    WHERE o.message_id IN (
-      SELECT message_id FROM st_regis_orders
-      WHERE (client_name ILIKE '%st regis%' OR client_name ILIKE '%ds smith%')
-        AND (review_action IS NULL OR review_action = '')
-    )
+    WHERE ${CLIENT_FILTER}
   `);
-  // Row order from Postgres is irrelevant here — processed_at/email_received_at
-  // are TEXT, not real timestamps, so any ORDER BY on them would be a
-  // lexicographic string sort, not chronological. Final ordering happens
-  // below via byMostRecent() on parsed Date values, after grouping by manifest.
+  const jobs = rows.map(rowToJob).filter(j => !HIDDEN_MESSAGE_IDS.includes(j.message_id));
+  markSupersededOccurrences(jobs);
+  return jobs;
+}
 
+function groupIntoManifests(jobs: ManifestJob[]): Manifest[] {
   const byMessage: Record<string, ManifestJob[]> = {};
-  for (const row of rows) {
-    const job = rowToJob(row);
-    if (HIDDEN_MESSAGE_IDS.includes(job.message_id)) continue;
+  for (const job of jobs) {
     if (!byMessage[job.message_id]) byMessage[job.message_id] = [];
     byMessage[job.message_id].push(job);
   }
   return Object.entries(byMessage)
-    .map(([msgId, jobs]) => buildManifest(msgId, jobs))
+    .map(([msgId, msgJobs]) => buildManifest(msgId, msgJobs))
     .sort(byMostRecent);
+}
+
+/** Manifests with at least one job still awaiting a reviewer decision. Most recent first. */
+export async function getPendingManifests(): Promise<Manifest[]> {
+  const allJobs = await fetchAllJobsWithSupersession();
+  const relevantMessageIds = new Set(
+    allJobs.filter(j => !j.review_action).map(j => j.message_id)
+  );
+  const jobs = allJobs.filter(j => relevantMessageIds.has(j.message_id));
+  return groupIntoManifests(jobs);
 }
 
 /** All manifests regardless of review state, for the "reviewed" archive view. Most recent first. */
 export async function getAllManifests(): Promise<Manifest[]> {
-  const pool = getPool();
-  const { rows } = await pool.query(`
-    SELECT ${SELECT_COLS} FROM st_regis_orders o
-    ${DECIDED_ELSEWHERE_JOIN}
-    WHERE o.client_name ILIKE '%st regis%' OR o.client_name ILIKE '%ds smith%'
-  `);
-
-  const byMessage: Record<string, ManifestJob[]> = {};
-  for (const row of rows) {
-    const job = rowToJob(row);
-    if (HIDDEN_MESSAGE_IDS.includes(job.message_id)) continue;
-    if (!byMessage[job.message_id]) byMessage[job.message_id] = [];
-    byMessage[job.message_id].push(job);
-  }
-  return Object.entries(byMessage)
-    .map(([msgId, jobs]) => buildManifest(msgId, jobs))
-    .sort(byMostRecent);
+  const jobs = await fetchAllJobsWithSupersession();
+  return groupIntoManifests(jobs);
 }
 
 export async function getManifestByMessageId(messageId: string): Promise<Manifest | null> {
-  const pool = getPool();
-  const { rows } = await pool.query(
-    `SELECT ${SELECT_COLS} FROM st_regis_orders o
-     ${DECIDED_ELSEWHERE_JOIN}
-     WHERE o.message_id = $1 ORDER BY o.job_number`,
-    [messageId]
-  );
-  if (rows.length === 0) return null;
-  return buildManifest(messageId, rows.map(rowToJob));
+  const allJobs = await fetchAllJobsWithSupersession();
+  const jobs = allJobs.filter(j => j.message_id === messageId).sort((a, b) => a.job_number.localeCompare(b.job_number));
+  if (jobs.length === 0) return null;
+  return buildManifest(messageId, jobs);
 }
 
 export type OtherJob = {

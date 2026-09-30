@@ -59,18 +59,17 @@ function pdfJobCount(m: Manifest): number {
 
 function ManifestRow({ manifest, active, onClick }: { manifest: Manifest; active: boolean; onClick: () => void }) {
   const jobCount = pdfJobCount(manifest);
-  // Per the 2026-09-30 George/Phil call: a job number already Added on a
-  // DIFFERENT email for the same booking form is not "new" here, even
-  // though this row's own copy is technically still unactioned in the DB.
-  // DS Smith resends the same form repeatedly, adding jobs each time —
-  // without this, a follow-up email with 2 genuinely new jobs plus 4
-  // already-processed ones would still show all 6. Confirmed in the
-  // transcript this applies ONLY to a genuine Add ("if a job has been
-  // PROCESSED from here, that number never shows again") — an Ignored/
-  // Cancelled job is explicitly NOT suppressed ("it would still show up
-  // again next time"), since Ignore/Cancel means no decision was actually
-  // taken on the real-world order.
-  const newJobs = manifest.jobs.filter((j) => !j.decided_elsewhere_message_id);
+  // Per George's direct confirmation 2026-09-30 (relaying Phil): "regardless
+  // of what was decided or not, only new orders show up in subsequent mails
+  // on the right side." A job number's only genuinely "new" appearance is
+  // its EARLIEST occurrence — every later resend of the same booking form
+  // (decided or not) is superseded and hidden. This replaced an earlier,
+  // narrower Add-only rule (see git history / lib/db.ts's
+  // markSupersededOccurrences docstring) once a real live case showed the
+  // Add-only version still cluttered the screen: DS Smith resent the same
+  // form 4+ times in one morning, nothing decided on any of them yet, so
+  // every resend kept showing every job all over again.
+  const newJobs = manifest.jobs.filter((j) => !j.superseded_by_earlier_message_id);
   // Job numbers weren't shown anywhere in the list — the only way to find a
   // specific job was already knowing which email it arrived on. Truncated
   // rather than every job on a large manifest, since this is a scan aid,
@@ -94,9 +93,9 @@ function ManifestRow({ manifest, active, onClick }: { manifest: Manifest; active
   // it they'd actually gotten through — a manifest with 9 of 10 decided
   // looked identical in the list to one nobody had opened yet. Reuses the
   // manifest's own job rows (already fetched, no new query) to count how
-  // many already have a review_action set — decided-elsewhere jobs count as
-  // decided here too, same reasoning as newJobs above.
-  const decidedCount = manifest.jobs.filter((j) => j.review_action || j.decided_elsewhere_message_id).length;
+  // many already have a review_action set — superseded jobs count as
+  // "handled" here too, same reasoning as newJobs above.
+  const decidedCount = manifest.jobs.filter((j) => j.review_action || j.superseded_by_earlier_message_id).length;
   const allDecided = jobCount > 0 && decidedCount >= jobCount;
   return (
     <button
@@ -540,12 +539,12 @@ function OrderCheckRow({
   included: boolean;
   onToggleIncluded: () => void;
 }) {
-  // A job already decided elsewhere (decided_elsewhere_message_id set) never
-  // reaches this component at all — ManifestDetail's `rows` filters those
-  // out of "own" entirely per Phil's ask (see that filter's comment). So the
-  // only way a row here is locked is its own review_action already being
-  // set — distinct from PriorOccurrenceBadge ("seen before", informational
-  // only, never blocks).
+  // A superseded job (superseded_by_earlier_message_id set — this isn't its
+  // job_number's earliest occurrence) never reaches this component at all —
+  // ManifestDetail's `rows` filters those out of "own" entirely per Phil's
+  // ask (see that filter's comment). So the only way a row here is locked is
+  // its own review_action already being set — distinct from
+  // PriorOccurrenceBadge ("seen before", informational only, never blocks).
   const locked = !!job.review_action;
   return (
     <div style={{ borderBottom: "1px solid var(--rule)", opacity: locked || included ? 1 : 0.55 }}>
@@ -792,13 +791,13 @@ function ManifestDetail({
   onProcessed: (messageId: string, jobNumbers: string[]) => void;
   onNavigateToJob: (jobNumber: string) => void;
 }) {
-  // Excludes jobs locked because a DIFFERENT occurrence of this job_number
-  // was already Added (decided_elsewhere_message_id set) — without this,
+  // Excludes jobs superseded by an EARLIER occurrence of this job_number
+  // (superseded_by_earlier_message_id set) — without this,
   // jobsToProcess/handleProcess would still submit a locked row, making the
   // hide-from-list below purely cosmetic and leaving the actual
   // double-processing risk (the reason this lock exists) open.
   const pendingJobs = useMemo(
-    () => manifest.jobs.filter((j) => !j.review_action && !j.decided_elsewhere_message_id),
+    () => manifest.jobs.filter((j) => !j.review_action && !j.superseded_by_earlier_message_id),
     [manifest]
   );
   // Per-job selected action, defaulting to the system's own suggestion.
@@ -867,16 +866,15 @@ function ManifestDetail({
   // action — other-PDF jobs (read-only, already handled or pending elsewhere)
   // follow after, sorted among themselves too.
   //
-  // Jobs already decided on a DIFFERENT occurrence of this job_number
-  // (decided_elsewhere_message_id set) are dropped from "own" entirely, per
-  // Phil's explicit ask (2026-09-30): "one job number should only ever show
-  // on the manifest dashboard screen one time." DS Smith resends the same
-  // booking form repeatedly, adding new jobs each time — a follow-up email
-  // with 2 new jobs plus 4 already-decided ones from the original send
-  // should show only the 2 new ones here, not all 6. Previously these were
-  // shown as a locked, greyed-out row instead of hidden — that still let
-  // every resend visually clutter the checklist with jobs staff had already
-  // dealt with, exactly what Phil was describing.
+  // Jobs superseded by an EARLIER occurrence of this job_number
+  // (superseded_by_earlier_message_id set) are dropped from "own" entirely,
+  // per George's direct confirmation 2026-09-30 (relaying Phil): "regardless
+  // of what was decided or not, only new orders show up in subsequent mails
+  // on the right side." DS Smith resends the same booking form repeatedly,
+  // adding new jobs each time — a follow-up email with 2 new jobs plus 4
+  // already-seen ones (decided or not) should show only the 2 new ones
+  // here, not all 6. See lib/db.ts's markSupersededOccurrences() for the
+  // full rule and why it replaced an earlier, narrower Add-only version.
   type Row = { job_number: string } & ({ kind: "own"; job: ManifestJob } | { kind: "other"; job: OtherPdfJob });
   const rows: Row[] = useMemo(() => {
     // Ordered to match the booking form itself, not alphabetically, per
@@ -902,7 +900,7 @@ function ManifestDetail({
       return diff !== 0 ? diff : a.job_number.localeCompare(b.job_number);
     };
     const own: Row[] = manifest.jobs
-      .filter((job) => !job.decided_elsewhere_message_id)
+      .filter((job) => !job.superseded_by_earlier_message_id)
       .map((job) => ({ kind: "own" as const, job, job_number: job.job_number }))
       .sort(byPdfOrder);
     const other: Row[] = otherJobs
@@ -910,12 +908,12 @@ function ManifestDetail({
       .sort(byPdfOrder);
     return [...own, ...other];
   }, [manifest.jobs, otherJobs]);
-  // Jobs hidden from `own` above because a different occurrence already
-  // decided them — a distinct count from otherJobs (jobs on the PDF that
-  // never got their own row under this message_id at all). Both explain why
-  // "on this form" can read lower than the PDF's real job count, so both are
+  // Jobs hidden from `own` above because an EARLIER occurrence already
+  // exists — a distinct count from otherJobs (jobs on the PDF that never got
+  // their own row under this message_id at all). Both explain why "on this
+  // form" can read lower than the PDF's real job count, so both are
   // surfaced in the header rather than only one.
-  const alreadyDecidedCount = manifest.jobs.filter((j) => j.decided_elsewhere_message_id).length;
+  const alreadySeenCount = manifest.jobs.filter((j) => j.superseded_by_earlier_message_id).length;
 
   useEffect(() => {
     setSelectedActions(Object.fromEntries(pendingJobs.map((j) => [j.job_number, defaultAction(j)])));
@@ -1094,7 +1092,7 @@ function ManifestDetail({
               <span className="text-[11px] tabular ml-1.5" style={{ color: "var(--label)" }}>
                 ({rows.length} new
                 {otherJobs.length > 0 ? `, ${otherJobs.length} handled elsewhere` : ""}
-                {alreadyDecidedCount > 0 ? `, ${alreadyDecidedCount} already decided` : ""})
+                {alreadySeenCount > 0 ? `, ${alreadySeenCount} already seen` : ""})
               </span>
             </div>
           </div>
