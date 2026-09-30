@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import type { Manifest, ManifestJob, ManifestAction, Recipient, CorrectableField, PendingChange, JobOccurrence } from "@/lib/db";
+import { recencyTimestamp, localDateKey, todayDateKey } from "@/lib/manifest-utils";
 import { PdfViewer } from "@/components/pdf-viewer";
 
 type OtherPdfJob = {
@@ -1300,6 +1301,20 @@ export default function Page() {
   const [filter, setFilter] = useState<"new" | "processed">("new");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  // Defaults to today's date, not "all" — per George/Phil's 2026-09-30
+  // request: with dedup live, a normal day's queue should just be that
+  // day's genuinely new orders, but the pre-existing backlog (every
+  // never-decided job from before the dedup fix existed) doesn't
+  // disappear on its own, since dedup only hides a job once a DIFFERENT
+  // occurrence of it has actually been Added somewhere. Rather than bulk-
+  // marking that backlog as done (real risk: a genuinely undecided order
+  // could get silently lost), this is a pure view/UX filter — the backlog
+  // data is untouched and fully visible again the moment "All dates" is
+  // picked. "Today" is the viewer's own local calendar day, so it means
+  // what it looks like it means to whoever's actually looking at the
+  // screen, not server time.
+  const [dateFilter, setDateFilter] = useState<"today" | "all">("today");
+  const [customDate, setCustomDate] = useState(""); // YYYY-MM-DD, "" = not using the picker
   const [showRecipients, setShowRecipients] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1331,8 +1346,16 @@ export default function Page() {
 
   useEffect(() => { load(); }, [load]);
 
-  const newManifests = useMemo(() => manifests.filter(isPending), [manifests]);
-  const processedManifests = useMemo(() => manifests.filter((m) => !isPending(m)), [manifests]);
+  // Applies to both tabs (New and Processed) — one consistent date lens
+  // across the whole dashboard rather than a special case for just one tab.
+  const dateFiltered = useMemo(() => {
+    if (dateFilter === "all") return manifests;
+    const targetKey = customDate || todayDateKey();
+    return manifests.filter((m) => localDateKey(recencyTimestamp(m)) === targetKey);
+  }, [manifests, dateFilter, customDate]);
+
+  const newManifests = useMemo(() => dateFiltered.filter(isPending), [dateFiltered]);
+  const processedManifests = useMemo(() => dateFiltered.filter((m) => !isPending(m)), [dateFiltered]);
   const filtered = filter === "new" ? newManifests : processedManifests;
 
   // The list row only ever showed the email subject line, not job numbers —
@@ -1388,6 +1411,14 @@ export default function Page() {
     // A linked manifest is often already processed by the time someone clicks
     // through from their inbox, so land on whichever tab actually holds it.
     setFilter(isPending(target) ? "new" : "processed");
+    // The date filter defaults to "today" — a direct link (e.g. from George's
+    // per-order email) must work regardless of what date is selected, or an
+    // older linked manifest would silently vanish from `visible` even though
+    // setSelectedId below points right at it. Same reasoning as switching
+    // tabs above: a deep link always wins over whatever filter happens to be
+    // active.
+    setDateFilter("all");
+    setCustomDate("");
     // target.message_id, not the raw param — with ?job= the two differ.
     setSelectedId(target.message_id);
   }, [manifests]);
@@ -1419,6 +1450,12 @@ export default function Page() {
     const target = manifests.find((m) => m.jobs.some((j) => j.job_number === jobNumber));
     if (!target) return;
     setFilter(isPending(target) ? "new" : "processed");
+    // Same reasoning as the deep-link effect above — an in-app cross
+    // reference (e.g. "already added elsewhere ↗") must be able to jump to
+    // that occurrence regardless of the date filter, since it's very
+    // commonly on a different day than whatever's currently selected.
+    setDateFilter("all");
+    setCustomDate("");
     setSelectedId(target.message_id);
   }
 
@@ -1512,6 +1549,38 @@ export default function Page() {
                 </button>
               ))}
             </div>
+            {/* Date filter — defaults to today so a normal day's queue is just
+                that day's genuinely new orders, not the whole accumulated
+                backlog (see dateFiltered above for why the backlog can't just
+                disappear on its own). A pure view filter: switching to "All
+                dates" shows everything again immediately, nothing is deleted
+                or marked decided by choosing "Today". */}
+            <div className="shrink-0 flex items-center gap-1.5 px-3 py-2" style={{ borderBottom: "1px solid var(--rule)" }}>
+              <select
+                value={dateFilter}
+                onChange={(e) => {
+                  const next = e.target.value as "today" | "all";
+                  setDateFilter(next);
+                  if (next === "all") setCustomDate("");
+                }}
+                className="text-xs px-2 py-1.5 rounded-sm"
+                style={{ border: "1px solid var(--rule)", background: "var(--paper)", color: "var(--ink)" }}
+              >
+                <option value="today">Today</option>
+                <option value="all">All dates</option>
+              </select>
+              <input
+                type="date"
+                value={customDate}
+                onChange={(e) => {
+                  setCustomDate(e.target.value);
+                  setDateFilter(e.target.value ? "today" : "all"); // reuses the "today" branch — it just targets customDate's key instead of today's
+                }}
+                className="text-xs px-2 py-1.5 rounded-sm flex-1 min-w-0"
+                style={{ border: "1px solid var(--rule)", background: "var(--paper)", color: "var(--ink)" }}
+                title="Pick a specific day instead of today"
+              />
+            </div>
             <div className="shrink-0 px-3 py-2" style={{ borderBottom: "1px solid var(--rule)" }}>
               <input
                 type="text"
@@ -1525,9 +1594,26 @@ export default function Page() {
             <div className="flex-1 overflow-y-auto">
               {visible.length === 0 ? (
                 <div className="px-4 py-8 text-center text-sm" style={{ color: "var(--label)" }}>
-                  {search.trim()
-                    ? "No match in this tab."
-                    : filter === "new" ? "Nothing waiting for review." : "Nothing recorded yet."}
+                  {search.trim() ? (
+                    "No match in this tab."
+                  ) : filter === "new" ? (
+                    dateFilter === "all" ? (
+                      "Nothing waiting for review."
+                    ) : (
+                      <>
+                        Nothing waiting for review on this date.
+                        <button
+                          onClick={() => { setDateFilter("all"); setCustomDate(""); }}
+                          className="block mx-auto mt-1.5 text-xs font-semibold underline"
+                          style={{ color: "var(--accent)" }}
+                        >
+                          Show all dates
+                        </button>
+                      </>
+                    )
+                  ) : (
+                    "Nothing recorded yet."
+                  )}
                 </div>
               ) : (
                 visible.map((m) => (
