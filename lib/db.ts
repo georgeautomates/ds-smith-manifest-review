@@ -145,21 +145,13 @@ function rowToJob(r: Record<string, any>): ManifestJob {
   };
 }
 
-/**
- * processed_at / email_received_at are stored as free-text (not a real
- * timestamp column), in two different Date.toString()-ish formats. A plain
- * string sort on them is lexicographic, not chronological — e.g. "Wed May 27"
- * vs "Thu Jun 5" sorts by the letter W vs T, not by actual date. Parse to
- * real Date objects instead. Prefers email_received_at (when DS Smith
- * actually sent the manifest) over processed_at (when our pipeline happened
- * to write the row) since that's the more meaningful "recency" for a reviewer.
- */
-function recencyTimestamp(m: Manifest): number {
-  const received = m.email_received_at ? Date.parse(m.email_received_at) : NaN;
-  if (!Number.isNaN(received)) return received;
-  const processed = m.processed_at ? Date.parse(m.processed_at) : NaN;
-  return Number.isNaN(processed) ? 0 : processed;
-}
+// recencyTimestamp lives in ./manifest-utils, not here — this file imports
+// `pg`, and a client component that imports anything from here (even a pure
+// function with no real dependency on `pg`) drags the whole module graph
+// into the browser bundle and breaks the build. Re-exported for existing
+// server-side callers in this file so nothing else here needs to change.
+export { recencyTimestamp } from "./manifest-utils";
+import { recencyTimestamp } from "./manifest-utils";
 
 function byMostRecent(a: Manifest, b: Manifest): number {
   return recencyTimestamp(b) - recencyTimestamp(a);
