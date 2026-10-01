@@ -128,7 +128,7 @@ function ManifestRow({ manifest, active, onClick }: { manifest: Manifest; active
           className="text-[11px] tabular font-semibold"
           style={{ color: allDecided ? "var(--accent)" : "var(--label)" }}
         >
-          {decidedCount}/{jobCount} reviewed
+          {decidedCount}/{jobCount} appeared before
         </span>
       </div>
     </button>
