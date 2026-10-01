@@ -171,6 +171,7 @@ function CorrectableExtractionField({
   label,
   fieldKey,
   value,
+  displayOverride,
   sub,
   hint,
   jobNumber,
@@ -181,6 +182,14 @@ function CorrectableExtractionField({
   label: string;
   fieldKey: CorrectableField;
   value: string;
+  // Read-only display text to show instead of `value` (e.g. Fibre's delivery
+  // time is always entered as 23:59 in the Client Portal regardless of what
+  // DS Smith printed on the form). Only affects what's shown before editing —
+  // `value` is still what seeds the edit box and what a correction is proposed
+  // against, so editing always starts from the real extracted value, never
+  // this override. Ignored whenever a systemChange is pending, since that
+  // already has its own, more urgent, override.
+  displayOverride?: string;
   sub?: string;
   hint?: string;
   jobNumber: string;
@@ -208,7 +217,7 @@ function CorrectableExtractionField({
   const systemChange = pendingChanges.find(
     (c) => c.field === fieldKey && c.source !== "human_correction",
   );
-  const displayValue = systemChange ? systemChange.current : value;
+  const displayValue = systemChange ? systemChange.current : (displayOverride ?? value);
 
   async function handlePropose() {
     if (!reason.trim() || !newValue.trim()) return;
@@ -643,6 +652,7 @@ function OrderCheckRow({
           <CorrectableExtractionField label="Delivery date" fieldKey="delivery_date" value={job.delivery_date}
             jobNumber={job.job_number} messageId={job.message_id} pendingChanges={pendingChanges} onProposed={onCorrectionChanged} />
           <CorrectableExtractionField label="Delivery time" fieldKey="delivery_time" value={job.delivery_time}
+            displayOverride={!job.client_name.toLowerCase().includes("reels") ? "23:59" : undefined}
             hint={
               !job.client_name.toLowerCase().includes("reels")
                 ? "Fibre delivery is always entered as 23:59 in the Client Portal, regardless of what's printed on the form — this is confirmed staff behaviour, not an extraction error"
