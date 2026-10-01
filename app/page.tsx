@@ -41,8 +41,16 @@ function fmtDateTime(iso: string): string {
   });
 }
 
+// A superseded job (an earlier occurrence already carries the real decision)
+// isn't actionable on THIS manifest, so it must not count toward "still
+// needs a decision on THIS screen" -- same exclusion Manifest.pending_count
+// already applies (lib/db.ts buildManifest). Missing it here meant a
+// manifest whose only undecided jobs were superseded-elsewhere ones stayed
+// stuck under New Orders forever, even once genuinely fully handled -- real
+// case caught live 2026-10-01: a 20-job manifest showed "20/20 appeared
+// before" (nothing left to decide) but never moved to Processed.
 function isPending(m: Manifest): boolean {
-  return m.jobs.some((j) => !j.review_action);
+  return m.jobs.some((j) => !j.review_action && !j.superseded_by_earlier_message_id);
 }
 
 /**
