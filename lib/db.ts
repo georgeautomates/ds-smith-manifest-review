@@ -798,3 +798,106 @@ export async function getAgentHeartbeats(): Promise<AgentHeartbeat[]> {
     updated_at: r.updated_at ? String(r.updated_at) : "",
   }));
 }
+
+// ── Wave-1 activity (admin-only, see /wave1-activity) ──────────────────────
+
+// Wave-1-and-later Client Portal clients only -- St Regis/DS Smith already
+// has the main reviewer page above, this is deliberately scoped to the
+// clients that don't have one. Kept in step with
+// firmin/clients/review_notify.py's PORTAL_CLIENTS the same way every other
+// wave-1 client-name list in this project is.
+const WAVE1_CLIENT_FILTER = `o.client_name ILIKE ANY(ARRAY[
+  '%unipet%', '%incontrast%', '%sig trading%', '%aim%',
+  '%revolution beauty%', '%eurocoils%'
+])`;
+
+export type Wave1Order = {
+  job_number: string;
+  message_id: string;
+  client_name: string;
+  processed_at: string;
+  pdf_url: string;
+  email_subject: string;
+  collection_point: string;
+  collection_postcode: string;
+  delivery_point: string;
+  delivery_postcode: string;
+  collection_date: string;
+  collection_time: string;
+  delivery_date: string;
+  delivery_time: string;
+  price: string;
+  order_number: string;
+  composite_score: number | null;
+  confidence_status: string;
+  rpa_status: string;
+  rpa_error: string;
+  rpa_attempted_at: string;
+};
+
+export async function getWave1Orders(limit = 150): Promise<Wave1Order[]> {
+  const pool = getPool();
+  const { rows } = await pool.query(
+    `SELECT o.job_number, o.message_id, o.client_name, o.processed_at, o.pdf_url,
+            o.email_subject, o.collection_point, o.collection_postcode,
+            o.delivery_point, o.delivery_postcode,
+            o.collection_date, o.collection_time, o.delivery_date, o.delivery_time,
+            o.price, o.order_number, o.composite_score, o.confidence_status,
+            o.rpa_status, o.rpa_error, o.rpa_attempted_at
+     FROM st_regis_orders o
+     WHERE ${WAVE1_CLIENT_FILTER}
+     ORDER BY o.processed_at DESC
+     LIMIT $1`,
+    [limit]
+  );
+  return rows.map((r) => ({
+    job_number: String(r.job_number ?? ""),
+    message_id: String(r.message_id ?? ""),
+    client_name: String(r.client_name ?? ""),
+    processed_at: r.processed_at ? String(r.processed_at) : "",
+    pdf_url: String(r.pdf_url ?? ""),
+    email_subject: String(r.email_subject ?? ""),
+    collection_point: String(r.collection_point ?? ""),
+    collection_postcode: String(r.collection_postcode ?? ""),
+    delivery_point: String(r.delivery_point ?? ""),
+    delivery_postcode: String(r.delivery_postcode ?? ""),
+    collection_date: String(r.collection_date ?? ""),
+    collection_time: String(r.collection_time ?? ""),
+    delivery_date: String(r.delivery_date ?? ""),
+    delivery_time: String(r.delivery_time ?? ""),
+    price: String(r.price ?? ""),
+    order_number: String(r.order_number ?? ""),
+    composite_score: r.composite_score === null ? null : Number(r.composite_score),
+    confidence_status: String(r.confidence_status ?? ""),
+    rpa_status: String(r.rpa_status ?? ""),
+    rpa_error: String(r.rpa_error ?? ""),
+    rpa_attempted_at: r.rpa_attempted_at ? String(r.rpa_attempted_at) : "",
+  }));
+}
+
+export type Wave1UnmatchedCount = {
+  client_name: string;
+  count: number;
+};
+
+// Mirrors firmin/clients/slack.py's post_unmatched_known_client_email --
+// that alert has no DB row of its own (Slack-only), so this is a cheap
+// proxy, not the same data: counts wave-1 clients' st_regis_orders rows
+// with a 0 composite_score (the score_order() floor, confirmed real for a
+// row whose extraction produced nothing usable) as a rough "something
+// landed but came out empty" signal until/unless the Slack alert itself
+// gets a DB-backed counterpart.
+export async function getWave1LowScoreCounts(): Promise<Wave1UnmatchedCount[]> {
+  const pool = getPool();
+  const { rows } = await pool.query(
+    `SELECT client_name, count(*) as count
+     FROM st_regis_orders o
+     WHERE ${WAVE1_CLIENT_FILTER} AND (o.composite_score IS NULL OR o.composite_score = 0)
+     GROUP BY client_name
+     ORDER BY count DESC`
+  );
+  return rows.map((r) => ({
+    client_name: String(r.client_name ?? ""),
+    count: Number(r.count ?? 0),
+  }));
+}

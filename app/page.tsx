@@ -1519,6 +1519,15 @@ export default function Page() {
           </a>
           {isAdminUser && (
             <a
+              href="/wave1-activity"
+              className="text-xs font-bold uppercase tracking-wide px-3 py-1.5 rounded-sm"
+              style={{ border: "1px solid var(--rule)", color: "var(--ink-soft)" }}
+            >
+              Wave-1 Activity
+            </a>
+          )}
+          {isAdminUser && (
+            <a
               href="/admin"
               className="text-xs font-bold uppercase tracking-wide px-3 py-1.5 rounded-sm"
               style={{ border: "1px solid var(--rule)", color: "var(--ink-soft)" }}
