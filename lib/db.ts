@@ -617,9 +617,18 @@ export type RpaRunSummary = {
 
 export async function getRecentRpaRuns(limit = 50): Promise<RpaRunSummary[]> {
   const pool = getPool();
+  // Scoped to St Regis/DS Smith only, same as the main manifest list
+  // (CLIENT_FILTER) -- confirmed 25 Oct this query had no client filter at
+  // all, so the Admin page showed every onboarded client's RPA runs
+  // unfiltered. Wave-1 clients (Unipet, InContrast, AIM, Revolution Beauty,
+  // Eurocoils) go live-submission the same day this was found; without this
+  // filter their runs would start appearing here immediately, contrary to
+  // the standing rule that this dashboard stays St Regis/DS Smith-only
+  // regardless of onboarding progress elsewhere.
   const { rows } = await pool.query(
     `SELECT run_at, job_number, client_name, status, success, failed_step, duration_ms, error
-     FROM rpa_runs ORDER BY run_at DESC LIMIT $1`,
+     FROM rpa_runs WHERE client_name ILIKE '%st regis%' OR client_name ILIKE '%ds smith%'
+     ORDER BY run_at DESC LIMIT $1`,
     [limit]
   );
   return rows.map((r) => ({
@@ -662,11 +671,19 @@ export type UnverifiedAddressRun = {
  */
 export async function getUnverifiedAddressRuns(limit = 100): Promise<UnverifiedAddressRun[]> {
   const pool = getPool();
+  // Scoped to St Regis/DS Smith only -- see getRecentRpaRuns' comment for
+  // why. Filtered in the latest_runs CTE (not the outer SELECT) so the
+  // DISTINCT ON picks each job's latest run among ONLY in-scope rows,
+  // rather than among all clients and then discarding out-of-scope ones
+  // afterward -- avoids a rare case where a wave-1 client's run for the
+  // same job_number is more recent and would otherwise win DISTINCT ON
+  // before an outer filter removed it.
   const { rows } = await pool.query(
     `WITH latest_runs AS (
        SELECT DISTINCT ON (job_number) job_number, run_at, client_name, filled
        FROM rpa_runs
        WHERE filled IS NOT NULL
+         AND (client_name ILIKE '%st regis%' OR client_name ILIKE '%ds smith%')
        ORDER BY job_number, run_at DESC
      )
      SELECT run_at, job_number, client_name, filled
@@ -717,9 +734,11 @@ export type PipelineRunSummary = {
 
 export async function getRecentPipelineRuns(limit = 50): Promise<PipelineRunSummary[]> {
   const pool = getPool();
+  // Scoped to St Regis/DS Smith only -- see getRecentRpaRuns' comment for why.
   const { rows } = await pool.query(
     `SELECT run_at, email_subject, client_name, status, job_count, jobs_written, jobs_skipped, jobs_failed, error
-     FROM pipeline_runs ORDER BY run_at DESC LIMIT $1`,
+     FROM pipeline_runs WHERE client_name ILIKE '%st regis%' OR client_name ILIKE '%ds smith%'
+     ORDER BY run_at DESC LIMIT $1`,
     [limit]
   );
   return rows.map((r) => ({
