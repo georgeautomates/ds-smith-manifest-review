@@ -103,6 +103,22 @@ export type ManifestJob = {
   superseded_by_earlier_message_id: string | null;
 };
 
+// #31 A2 (haulage_firmin migrations/create_st_regis_form_counts.sql): the orders on one booking
+// email counted at every stage, from the st_regis_stage_counts view. layout_rows is an independent
+// count of the table rows on the PDF (never by job number), parser_jobs the parser's job list; the
+// rest are derived from st_regis_orders / rpa_submissions / approve_edit_runs. Null layout_rows =
+// the form wasn't counted (agent down, or before the count existed).
+export type StageCounts = {
+  layout_rows: number | null;
+  parser_jobs: number | null;
+  saved: number;
+  new_on_form: number;
+  selected: number;
+  in_proteo: number;
+  on_approve: number;
+  form_mismatch: string | null;
+};
+
 export type Manifest = {
   message_id: string;
   subject: string;
@@ -111,6 +127,7 @@ export type Manifest = {
   client_group: string;
   jobs: ManifestJob[];
   pending_count: number;
+  counts: StageCounts | null;
 };
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -183,7 +200,37 @@ function buildManifest(msgId: string, jobs: ManifestJob[]): Manifest {
     // "still needs a decision on THIS screen" — same reasoning as excluding
     // an already-decided job.
     pending_count: jobs.filter(j => !j.review_action && !j.superseded_by_earlier_message_id).length,
+    counts: null, // filled in by attachStageCounts()
   };
+}
+
+/**
+ * Attaches each manifest's stage counts (#31 A2). Observability only: if the view is missing or the
+ * query fails, the dashboard still works and simply shows no counts.
+ */
+async function attachStageCounts(manifests: Manifest[]): Promise<Manifest[]> {
+  if (manifests.length === 0) return manifests;
+  try {
+    const { rows } = await getPool().query(
+      `SELECT message_id, layout_rows, parser_jobs, saved, new_on_form, selected, in_proteo, on_approve, form_mismatch
+       FROM st_regis_stage_counts WHERE message_id = ANY($1)`,
+      [manifests.map(m => m.message_id)],
+    );
+    const num = (v: unknown) => (v == null ? null : Number(v));
+    const byId = new Map<string, StageCounts>();
+    for (const r of rows) {
+      byId.set(String(r.message_id), {
+        layout_rows: num(r.layout_rows), parser_jobs: num(r.parser_jobs),
+        saved: Number(r.saved ?? 0), new_on_form: Number(r.new_on_form ?? 0), selected: Number(r.selected ?? 0),
+        in_proteo: Number(r.in_proteo ?? 0), on_approve: Number(r.on_approve ?? 0),
+        form_mismatch: r.form_mismatch ? String(r.form_mismatch) : null,
+      });
+    }
+    for (const m of manifests) m.counts = byId.get(m.message_id) ?? null;
+  } catch (e) {
+    console.error("stage counts unavailable:", e);
+  }
+  return manifests;
 }
 
 // ── Queries ──────────────────────────────────────────────────────────────────
@@ -280,15 +327,17 @@ async function fetchAllJobsWithSupersession(): Promise<ManifestJob[]> {
   return jobs;
 }
 
-function groupIntoManifests(jobs: ManifestJob[]): Manifest[] {
+async function groupIntoManifests(jobs: ManifestJob[]): Promise<Manifest[]> {
   const byMessage: Record<string, ManifestJob[]> = {};
   for (const job of jobs) {
     if (!byMessage[job.message_id]) byMessage[job.message_id] = [];
     byMessage[job.message_id].push(job);
   }
-  return Object.entries(byMessage)
-    .map(([msgId, msgJobs]) => buildManifest(msgId, msgJobs))
-    .sort(byMostRecent);
+  return attachStageCounts(
+    Object.entries(byMessage)
+      .map(([msgId, msgJobs]) => buildManifest(msgId, msgJobs))
+      .sort(byMostRecent),
+  );
 }
 
 /** Manifests with at least one job still awaiting a reviewer decision. Most recent first. */
@@ -311,7 +360,8 @@ export async function getManifestByMessageId(messageId: string): Promise<Manifes
   const allJobs = await fetchAllJobsWithSupersession();
   const jobs = allJobs.filter(j => j.message_id === messageId).sort((a, b) => a.job_number.localeCompare(b.job_number));
   if (jobs.length === 0) return null;
-  return buildManifest(messageId, jobs);
+  const [manifest] = await attachStageCounts([buildManifest(messageId, jobs)]);
+  return manifest;
 }
 
 export type OtherJob = {
