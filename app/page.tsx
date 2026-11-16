@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
-import type { Manifest, ManifestJob, ManifestAction, Recipient, CorrectableField, PendingChange, JobOccurrence } from "@/lib/db";
+import type { Manifest, ManifestJob, ManifestAction, Recipient, CorrectableField, PendingChange, JobOccurrence, StageCounts } from "@/lib/db";
 import { recencyTimestamp, localDateKey, todayDateKey } from "@/lib/manifest-utils";
 import { PdfViewer } from "@/components/pdf-viewer";
 
@@ -63,6 +63,86 @@ function pdfJobCount(m: Manifest): number {
   const pdfNumbers = m.jobs.find((j) => j.pdf_job_numbers.length > 0)?.pdf_job_numbers;
   if (!pdfNumbers) return m.jobs.length;
   return new Set([...pdfNumbers, ...m.jobs.map((j) => j.job_number)]).size;
+}
+
+// ── Order counts at every stage (#31 A2) ──────────────────────────────────────
+// Form = table rows on the PDF counted by layout (independent of the job-number reader).
+// New = jobs not on an earlier email (what the office should be choosing from). Selected = Add.
+// In Proteo = the robot saw Proteo confirm the order (recorded since 11 Nov).
+
+// The robot's confirmed-submit record exists from 11 Nov 2026 (#44); before that "In Proteo" is unknown.
+const PROTEO_TRACKED_FROM = Date.parse("2026-11-12T00:00:00Z");
+
+/** Why this email's counts need a look (red), or null. An order missing here is never booked. */
+function countProblem(c: StageCounts): string | null {
+  if (c.form_mismatch) return `Booking form: ${c.form_mismatch}`;
+  if (c.layout_rows != null && c.layout_rows !== c.saved) {
+    return `${c.layout_rows} orders on the booking form but ${c.saved} on the dashboard`;
+  }
+  return null;
+}
+
+function proteoTracked(m: Manifest): boolean {
+  return recencyTimestamp(m) >= PROTEO_TRACKED_FROM;
+}
+
+function StageCountsLine({ manifest }: { manifest: Manifest }) {
+  const c = manifest.counts;
+  if (!c) return null;
+  const problem = countProblem(c);
+  const proteoShort = proteoTracked(manifest) && c.in_proteo < c.selected;
+  const color = problem ? "var(--cancel)" : "var(--label)";
+  return (
+    <div className="text-[10px] tabular truncate" style={{ color }} title={problem ?? undefined}>
+      {problem ? "⚠ " : ""}
+      Form {c.layout_rows ?? "?"} · New {c.new_on_form} · Selected {c.selected}
+      {proteoTracked(manifest) && (
+        <span style={{ color: proteoShort && !problem ? "var(--warn)" : undefined }}> · In Proteo {c.in_proteo}</span>
+      )}
+    </div>
+  );
+}
+
+function StageCountsStrip({ manifest }: { manifest: Manifest }) {
+  const c = manifest.counts;
+  if (!c) return null;
+  const problem = countProblem(c);
+  const tracked = proteoTracked(manifest);
+  const cells: { label: string; value: string; hint: string; tone?: "danger" | "warn" }[] = [
+    { label: "On form", value: c.layout_rows == null ? "?" : String(c.layout_rows),
+      hint: "Order rows on the booking form, counted from the table layout (not from the job numbers)",
+      tone: problem ? "danger" : undefined },
+    { label: "Saved", value: String(c.saved), hint: "Orders on the dashboard for this email",
+      tone: problem ? "danger" : undefined },
+    { label: "New", value: String(c.new_on_form), hint: "Orders not on an earlier email: the ones to choose from" },
+    { label: "Selected", value: String(c.selected), hint: "Orders marked Add" },
+    { label: "In Proteo", value: tracked ? String(c.in_proteo) : "-",
+      hint: tracked ? "Selected orders the robot saw Proteo confirm" : "Not recorded before 11 Nov",
+      tone: tracked && c.in_proteo < c.selected ? "warn" : undefined },
+  ];
+  const toneColor = (t?: string) => (t === "danger" ? "var(--cancel)" : t === "warn" ? "var(--warn)" : "var(--ink)");
+  return (
+    <div className="mt-2 flex flex-col gap-1">
+      <div className="flex flex-wrap gap-x-5 gap-y-1">
+        {cells.map((cell) => (
+          <div key={cell.label} title={cell.hint} className="flex items-baseline gap-1.5">
+            <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: "var(--label)" }}>{cell.label}</span>
+            <span className="text-sm font-semibold tabular" style={{ color: toneColor(cell.tone) }}>{cell.value}</span>
+          </div>
+        ))}
+      </div>
+      {problem && (
+        <div className="text-xs font-semibold" style={{ color: "var(--cancel)" }}>
+          {problem}. Please check every order on the form is on the dashboard.
+        </div>
+      )}
+      {!problem && tracked && c.in_proteo < c.selected && (
+        <div className="text-xs" style={{ color: "var(--warn)" }}>
+          {c.selected - c.in_proteo} selected order(s) not confirmed in Proteo yet. Fine for a few minutes after selecting; check if it stays.
+        </div>
+      )}
+    </div>
+  );
 }
 
 function ManifestRow({ manifest, active, onClick }: { manifest: Manifest; active: boolean; onClick: () => void }) {
@@ -130,6 +210,7 @@ function ManifestRow({ manifest, active, onClick }: { manifest: Manifest; active
       <div className="text-[10px] truncate" style={{ color: "var(--label)" }}>
         {manifest.subject || "No subject"}
       </div>
+      <StageCountsLine manifest={manifest} />
       <div className="flex items-center justify-between gap-2">
         <span className="text-[11px] tabular" style={{ color: "var(--label)" }}>{fmtDateTime(manifest.email_received_at)}</span>
         <span
@@ -1054,6 +1135,7 @@ function ManifestDetail({
       <div className="shrink-0 px-6 py-3" style={{ borderBottom: "1px solid var(--rule)", background: "var(--paper-raised)" }}>
         <div className="text-[11px] font-bold uppercase tracking-widest mb-0.5" style={{ color: "var(--label)" }}>Subject</div>
         <div className="text-sm font-semibold" style={{ color: "var(--ink)" }}>{manifest.subject || "No subject"}</div>
+        <StageCountsStrip manifest={manifest} />
       </div>
 
       <div className="flex-1 flex min-w-0 min-h-0 overflow-hidden">
